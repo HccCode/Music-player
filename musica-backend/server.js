@@ -12,7 +12,7 @@ const io = new Server(server, { cors: { origin: '*' } });
 const spotifyApi = new SpotifyWebApi({
   clientId: 'T2cdbade90a534da1b99991ce51b0c34f', // Reemplaza con tu Client ID
   clientSecret: 'T090fd7a091f441a491f0c8c239bcffe0', // Reemplaza con tu Client Secret
-  redirectUri: 'http://localhost:3001/callback'
+  redirectUri: 'http://127.0.0.1:3001/callback'
 });
 
 let tareasProgramadas = [];
