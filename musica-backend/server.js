@@ -10,8 +10,8 @@ const io = new Server(server, { cors: { origin: '*' } });
 
 // 1. Configuración de Spotify
 const spotifyApi = new SpotifyWebApi({
-  clientId: 'T2cdbade90a534da1b99991ce51b0c34f', // Reemplaza con tu Client ID
-  clientSecret: 'T090fd7a091f441a491f0c8c239bcffe0', // Reemplaza con tu Client Secret
+  clientId: '2cdbade90a534da1b99991ce51b0c34f', // Reemplaza con tu Client ID
+  clientSecret: '090fd7a091f441a491f0c8c239bcffe0', // Reemplaza con tu Client Secret
   redirectUri: 'http://127.0.0.1:3001/callback'
 });
 
@@ -111,6 +111,6 @@ io.on('connection', (socket) => {
 });
 
 server.listen(3001, () => {
-    console.log('Backend de Spotify corriendo en http://localhost:3001');
-    console.log('IMPORTANTE: Antes de programar música, debes autenticarte entrando a: http://localhost:3001/login');
+    console.log('Backend de Spotify corriendo en http://127.0.0.1:3001');
+    console.log('IMPORTANTE: Antes de programar música, debes autenticarte entrando a: http://127.0.0.1:3001/login');
 });
