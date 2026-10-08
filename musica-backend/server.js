@@ -8,7 +8,6 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
-// 1. Configuración de Spotify
 const spotifyApi = new SpotifyWebApi({
   clientId: '2cdbade90a534da1b99991ce51b0c34f', // Reemplaza con tu Client ID
   clientSecret: '090fd7a091f441a491f0c8c239bcffe0', // Reemplaza con tu Client Secret
@@ -18,85 +17,85 @@ const spotifyApi = new SpotifyWebApi({
 let tareasProgramadas = [];
 let tokenRefreshInterval = null;
 
-// 2. Rutas de Autenticación (OAuth 2.0)
+// Convertidor de URL web a URI de Spotify
+function parseSpotifyUri(input) {
+    if (input.includes('spotify.com')) {
+        const match = input.match(/(track|playlist|album)\/([a-zA-Z0-9]+)/);
+        if (match) return `spotify:${match[1]}:${match[2]}`;
+    }
+    return input;
+}
+
 app.get('/login', (req, res) => {
-  // Pedimos permiso para modificar la reproducción y leer el estado activo
-  const scopes = ['user-modify-playback-state', 'user-read-playback-state'];
+  const scopes = ['user-modify-playback-state', 'user-read-playback-state', 'playlist-read-private', 'playlist-read-collaborative'];
   const authorizeURL = spotifyApi.createAuthorizeURL(scopes, 'estado-inicial');
   res.redirect(authorizeURL);
 });
 
 app.get('/callback', (req, res) => {
   const code = req.query.code || null;
-  
   spotifyApi.authorizationCodeGrant(code).then(
     (data) => {
-      // Guardamos los tokens en la instancia
       spotifyApi.setAccessToken(data.body['access_token']);
       spotifyApi.setRefreshToken(data.body['refresh_token']);
-      
-      console.log('¡Spotify autenticado correctamente!');
+      console.log('¡Spotify autenticado!');
 
-      // Spotify expira el token cada hora. Lo refrescamos automáticamente cada 50 mins.
       if(tokenRefreshInterval) clearInterval(tokenRefreshInterval);
       tokenRefreshInterval = setInterval(() => {
         spotifyApi.refreshAccessToken().then(
-          (data) => {
-            console.log('Token de Spotify renovado.');
-            spotifyApi.setAccessToken(data.body['access_token']);
-          },
-          (err) => {
-            console.error('Error al refrescar el token', err);
-          }
+          (data) => spotifyApi.setAccessToken(data.body['access_token']),
+          (err) => console.error('Error al refrescar token', err)
         );
       }, 50 * 60 * 1000);
 
-      res.send(`
-        <h2 style="font-family:sans-serif; color:#1DB954;">¡Autenticación Exitosa!</h2>
-        <p style="font-family:sans-serif;">Tu servidor ya tiene control de Spotify. Puedes cerrar esta ventana y regresar a tu dashboard.</p>
-      `);
+      res.send('<h2 style="color:#1DB954;">¡Autenticación Exitosa! Cierra esta ventana.</h2>');
     },
-    (err) => {
-      console.error('Error al obtener tokens de Spotify:', err);
-      res.send('Ocurrió un error en la autenticación.');
-    }
+    (err) => res.send('Error en la autenticación.')
   );
 });
 
-// 3. Lógica de Sockets y Programación
 io.on('connection', (socket) => {
-    console.log('Interfaz conectada al backend');
-    
     socket.emit('tareas_actualizadas', tareasProgramadas.map(t => ({ id: t.id, hora: t.hora, minuto: t.minuto, ruta: t.ruta })));
+
+    // CONTROLES EN TIEMPO REAL
+    socket.on('control_play', async () => { try { await spotifyApi.play(); } catch(e){} });
+    socket.on('control_pausa', async () => { try { await spotifyApi.pause(); } catch(e){} });
+    socket.on('control_siguiente', async () => { try { await spotifyApi.skipToNext(); } catch(e){} });
+    socket.on('control_anterior', async () => { try { await spotifyApi.skipToPrevious(); } catch(e){} });
+
+    // OBTENER LISTA DE CANCIONES
+    socket.on('obtener_playlist', async (rutaOriginal) => {
+        try {
+            const uri = parseSpotifyUri(rutaOriginal);
+            if (uri.includes('playlist')) {
+                const playlistId = uri.split(':')[2];
+                const data = await spotifyApi.getPlaylistTracks(playlistId);
+                const tracks = data.body.items.map((item, index) => `${index + 1}. ${item.track.name} - ${item.track.artists[0].name}`);
+                socket.emit('lista_canciones_resultado', tracks);
+            } else {
+                socket.emit('lista_canciones_resultado', ['Este enlace es de una sola canción, no una playlist.']);
+            }
+        } catch (error) {
+            socket.emit('lista_canciones_resultado', ['Error al cargar la playlist. Verifica el enlace.']);
+        }
+    });
 
     socket.on('programar_musica', (data) => {
         const { hora, minuto, ruta } = data;
-        const cronExpression = `${minuto} ${hora} * * *`;
+        const uriSpotify = parseSpotifyUri(ruta); // Convierte la URL si es necesario
         
-        const tareaCron = cron.schedule(cronExpression, async () => {
-            console.log(`Es la hora. Intentando reproducir URI de Spotify: ${ruta}`);
-            
+        const tareaCron = cron.schedule(`${minuto} ${hora} * * *`, async () => {
             try {
-                // Spotify requiere diferente formato si es una sola canción (track) o una lista/álbum
-                const esTrack = ruta.includes('track');
-                const opcionesReproduccion = esTrack ? { uris: [ruta] } : { context_uri: ruta };
-
-                await spotifyApi.play(opcionesReproduccion);
-                console.log('Música iniciada en Spotify con éxito.');
-                io.emit('reproduciendo', { ruta, hora, minuto });
-
+                const esTrack = uriSpotify.includes('track');
+                const opciones = esTrack ? { uris: [uriSpotify] } : { context_uri: uriSpotify };
+                await spotifyApi.play(opciones);
+                io.emit('reproduciendo', { ruta: uriSpotify, hora, minuto });
             } catch (error) {
-                console.error('Error al reproducir en Spotify:', error.body || error);
-                // Si el error es NO_ACTIVE_DEVICE, significa que necesitas tener Spotify abierto en algún lado
-                if (error.body && error.body.error && error.body.error.reason === 'NO_ACTIVE_DEVICE') {
-                    console.log('ATENCIÓN: Debes tener la app de Spotify abierta y activa en algún dispositivo (PC, móvil, etc.).');
-                }
+                console.error('Error al reproducir:', error.body?.error?.reason || error);
             }
         });
 
-        const nuevaTarea = { id: Date.now(), hora, minuto, ruta, cronObj: tareaCron };
-        tareasProgramadas.push(nuevaTarea);
-        
+        tareasProgramadas.push({ id: Date.now(), hora, minuto, ruta, cronObj: tareaCron });
         io.emit('tareas_actualizadas', tareasProgramadas.map(t => ({ id: t.id, hora: t.hora, minuto: t.minuto, ruta: t.ruta })));
     });
 
@@ -110,7 +109,4 @@ io.on('connection', (socket) => {
     });
 });
 
-server.listen(3001, () => {
-    console.log('Backend de Spotify corriendo en http://127.0.0.1:3001');
-    console.log('IMPORTANTE: Antes de programar música, debes autenticarte entrando a: http://127.0.0.1:3001/login');
-});
+server.listen(3001, () => console.log('Backend corriendo en http://localhost:3001'));

@@ -1,175 +1,291 @@
-/* src/diseno.css */
-
 :root {
-  --bg-fondo: #0f172a;       /* Azul muy oscuro para el fondo principal */
-  --bg-tarjeta: #1e293b;     /* Fondo de los paneles y tarjetas */
-  --texto-principal: #f8fafc;
-  --texto-secundario: #94a3b8;
-  --color-primario: #3b82f6; /* Azul brillante para botones principales */
-  --color-primario-hover: #2563eb;
-  --color-peligro: #ef4444;  /* Rojo para cancelar */
-  --color-peligro-hover: #dc2626;
-  --borde-radio: 12px;
-  --borde-color: #334155;
+  --bg-principal: #121212;
+  --bg-tarjeta: #181818;
+  --bg-input: #2a2a2a;
+  --texto-principal: #ffffff;
+  --texto-secundario: #b3b3b3;
+  --acento-primario: #1db954; /* Verde Spotify */
+  --acento-hover: #1ed760;
+  --acento-peligro: #e22134;
+  --borde-radio: 8px;
+  --transicion: all 0.3s ease;
 }
 
 body {
   margin: 0;
-  background-color: var(--bg-fondo);
+  padding: 0;
+  background-color: var(--bg-principal);
   color: var(--texto-principal);
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   min-height: 100vh;
 }
 
 .dashboard-container {
-  max-width: 800px;
+  max-width: 700px;
   margin: 40px auto;
   padding: 0 20px;
 }
 
 .dashboard-header {
-  margin-bottom: 30px;
+  text-align: center;
+  margin-bottom: 40px;
 }
 
 .dashboard-header h2 {
-  margin: 0 0 5px 0;
-  font-size: 2rem;
-  font-weight: 700;
+  font-size: 2.5rem;
+  margin: 0 0 10px 0;
+  font-weight: 800;
+  letter-spacing: -1px;
 }
 
 .dashboard-header p {
-  margin: 0;
   color: var(--texto-secundario);
+  font-size: 1rem;
+  margin: 0;
 }
 
+/* Tarjetas */
 .tarjeta {
   background-color: var(--bg-tarjeta);
   border-radius: var(--borde-radio);
-  padding: 24px;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-  border: 1px solid var(--borde-color);
-  margin-bottom: 24px;
+  padding: 25px;
+  margin-bottom: 20px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
 
+.tarjeta h3 {
+  margin-top: 0;
+  font-size: 1.2rem;
+  border-bottom: 1px solid #333;
+  padding-bottom: 15px;
+  margin-bottom: 20px;
+}
+
+/* Controles en Vivo */
+.controles-reproduccion {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 15px;
+}
+
+.btn-control {
+  background-color: transparent;
+  color: var(--texto-secundario);
+  border: 1px solid var(--texto-secundario);
+  border-radius: 50px;
+  padding: 10px 20px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transicion);
+}
+
+.btn-control:hover {
+  color: var(--texto-principal);
+  border-color: var(--texto-principal);
+  transform: scale(1.05);
+}
+
+.btn-play {
+  background-color: var(--texto-principal);
+  color: #000;
+  border-color: var(--texto-principal);
+  padding: 12px 30px;
+  font-size: 1rem;
+}
+
+.btn-play:hover {
+  background-color: #f0f0f0;
+  color: #000;
+}
+
+/* Formulario de Programación */
 .formulario-programar {
   display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
+  gap: 15px;
   align-items: flex-end;
+  flex-wrap: wrap;
 }
 
 .grupo-input {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  flex-grow: 1;
+  flex: 1;
+  min-width: 200px;
 }
 
 .grupo-input label {
-  font-size: 0.875rem;
+  font-size: 0.85rem;
   color: var(--texto-secundario);
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .grupo-input input {
-  background-color: var(--bg-fondo);
-  border: 1px solid var(--borde-color);
+  background-color: var(--bg-input);
   color: var(--texto-principal);
-  padding: 12px 16px;
-  border-radius: 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 12px 15px;
   font-size: 1rem;
   outline: none;
-  transition: border-color 0.2s;
+  transition: var(--transicion);
 }
 
 .grupo-input input:focus {
-  border-color: var(--color-primario);
+  border-color: var(--texto-secundario);
+  background-color: #333;
 }
 
+/* Botones Generales */
 .btn {
-  padding: 12px 24px;
-  border-radius: 8px;
-  font-weight: 600;
-  font-size: 1rem;
-  cursor: pointer;
   border: none;
-  transition: background-color 0.2s, transform 0.1s;
+  border-radius: 50px;
+  padding: 12px 24px;
+  font-weight: 700;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: var(--transicion);
+  height: 45px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .btn:active {
-  transform: scale(0.98);
+  transform: scale(0.97);
 }
 
 .btn-primario {
-  background-color: var(--color-primario);
-  color: white;
-  height: 46px; /* Para alinear con los inputs */
+  background-color: var(--acento-primario);
+  color: #000;
 }
 
 .btn-primario:hover {
-  background-color: var(--color-primario-hover);
+  background-color: var(--acento-hover);
+  transform: scale(1.04);
+}
+
+.btn-secundario {
+  background-color: transparent;
+  color: var(--texto-principal);
+  border: 1px solid #555;
+  height: auto;
+  padding: 8px 16px;
+}
+
+.btn-secundario:hover {
+  border-color: var(--texto-principal);
 }
 
 .btn-peligro {
   background-color: transparent;
-  color: var(--color-peligro);
-  border: 1px solid var(--color-peligro);
+  color: var(--texto-secundario);
+  height: auto;
   padding: 8px 16px;
 }
 
 .btn-peligro:hover {
-  background-color: var(--color-peligro);
-  color: white;
+  color: var(--acento-peligro);
 }
 
+/* Lista de Horarios Activos */
 .lista-tareas {
   list-style: none;
   padding: 0;
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 15px;
 }
 
 .tarea-item {
-  background-color: var(--bg-fondo);
-  border: 1px solid var(--borde-color);
-  border-radius: 8px;
-  padding: 16px;
+  background-color: #242424;
+  border-radius: 6px;
+  padding: 15px 20px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  transition: border-color 0.2s;
+  transition: background-color 0.2s;
 }
 
 .tarea-item:hover {
-  border-color: #475569;
+  background-color: #2a2a2a;
 }
 
 .tarea-info {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 15px;
+  flex: 1;
+  overflow: hidden;
 }
 
 .tarea-hora {
-  font-size: 1.25rem;
-  font-weight: 700;
-  color: var(--color-primario);
-  background: rgba(59, 130, 246, 0.1);
-  padding: 6px 12px;
-  border-radius: 6px;
+  font-size: 1.4rem;
+  font-weight: 800;
+  color: var(--acento-primario);
 }
 
 .tarea-ruta {
   color: var(--texto-secundario);
-  font-size: 0.95rem;
-  word-break: break-all;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tarea-acciones {
+  display: flex;
+  gap: 10px;
 }
 
 .estado-vacio {
   text-align: center;
   color: var(--texto-secundario);
-  padding: 40px 0;
-  font-style: italic;
+  padding: 30px 0;
+  font-size: 0.95rem;
+}
+
+/* Visor de Playlist */
+.visor-playlist {
+  background-color: #1a1a1a;
+  border: 1px solid #333;
+}
+
+.lista-canciones-interna {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.lista-canciones-interna li {
+  padding: 12px 10px;
+  border-bottom: 1px solid #2a2a2a;
+  color: var(--texto-secundario);
+  font-size: 0.9rem;
+  transition: color 0.2s;
+}
+
+.lista-canciones-interna li:hover {
+  color: var(--texto-principal);
+  background-color: #222;
+}
+
+/* Scrollbar para la playlist */
+.lista-canciones-interna::-webkit-scrollbar {
+  width: 8px;
+}
+.lista-canciones-interna::-webkit-scrollbar-track {
+  background: var(--bg-tarjeta);
+}
+.lista-canciones-interna::-webkit-scrollbar-thumb {
+  background: #555;
+  border-radius: 4px;
+}
+.lista-canciones-interna::-webkit-scrollbar-thumb:hover {
+  background: #777;
 }
