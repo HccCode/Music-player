@@ -1,0 +1,175 @@
+/* src/diseno.css */
+
+:root {
+  --bg-fondo: #0f172a;       /* Azul muy oscuro para el fondo principal */
+  --bg-tarjeta: #1e293b;     /* Fondo de los paneles y tarjetas */
+  --texto-principal: #f8fafc;
+  --texto-secundario: #94a3b8;
+  --color-primario: #3b82f6; /* Azul brillante para botones principales */
+  --color-primario-hover: #2563eb;
+  --color-peligro: #ef4444;  /* Rojo para cancelar */
+  --color-peligro-hover: #dc2626;
+  --borde-radio: 12px;
+  --borde-color: #334155;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-fondo);
+  color: var(--texto-principal);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+}
+
+.dashboard-container {
+  max-width: 800px;
+  margin: 40px auto;
+  padding: 0 20px;
+}
+
+.dashboard-header {
+  margin-bottom: 30px;
+}
+
+.dashboard-header h2 {
+  margin: 0 0 5px 0;
+  font-size: 2rem;
+  font-weight: 700;
+}
+
+.dashboard-header p {
+  margin: 0;
+  color: var(--texto-secundario);
+}
+
+.tarjeta {
+  background-color: var(--bg-tarjeta);
+  border-radius: var(--borde-radio);
+  padding: 24px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  border: 1px solid var(--borde-color);
+  margin-bottom: 24px;
+}
+
+.formulario-programar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-end;
+}
+
+.grupo-input {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-grow: 1;
+}
+
+.grupo-input label {
+  font-size: 0.875rem;
+  color: var(--texto-secundario);
+  font-weight: 500;
+}
+
+.grupo-input input {
+  background-color: var(--bg-fondo);
+  border: 1px solid var(--borde-color);
+  color: var(--texto-principal);
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 1rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.grupo-input input:focus {
+  border-color: var(--color-primario);
+}
+
+.btn {
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 1rem;
+  cursor: pointer;
+  border: none;
+  transition: background-color 0.2s, transform 0.1s;
+}
+
+.btn:active {
+  transform: scale(0.98);
+}
+
+.btn-primario {
+  background-color: var(--color-primario);
+  color: white;
+  height: 46px; /* Para alinear con los inputs */
+}
+
+.btn-primario:hover {
+  background-color: var(--color-primario-hover);
+}
+
+.btn-peligro {
+  background-color: transparent;
+  color: var(--color-peligro);
+  border: 1px solid var(--color-peligro);
+  padding: 8px 16px;
+}
+
+.btn-peligro:hover {
+  background-color: var(--color-peligro);
+  color: white;
+}
+
+.lista-tareas {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tarea-item {
+  background-color: var(--bg-fondo);
+  border: 1px solid var(--borde-color);
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  transition: border-color 0.2s;
+}
+
+.tarea-item:hover {
+  border-color: #475569;
+}
+
+.tarea-info {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.tarea-hora {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--color-primario);
+  background: rgba(59, 130, 246, 0.1);
+  padding: 6px 12px;
+  border-radius: 6px;
+}
+
+.tarea-ruta {
+  color: var(--texto-secundario);
+  font-size: 0.95rem;
+  word-break: break-all;
+}
+
+.estado-vacio {
+  text-align: center;
+  color: var(--texto-secundario);
+  padding: 40px 0;
+  font-style: italic;
+}

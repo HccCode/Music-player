@@ -1,0 +1,57 @@
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const cron = require('node-cron');
+const { exec } = require('child_process');
+
+const app = express();
+const server = http.createServer(app);
+// Configuramos CORS para permitir la conexión desde el frontend (Vite por defecto usa el puerto 5173)
+const io = new Server(server, { cors: { origin: '*' } });
+
+// Almacenamiento en memoria de las tareas programadas
+let tareasProgramadas = [];
+
+io.on('connection', (socket) => {
+    console.log('Interfaz conectada');
+    
+    // Al conectar, enviamos las tareas que ya están programadas
+    socket.emit('tareas_actualizadas', tareasProgramadas.map(t => ({ id: t.id, hora: t.hora, minuto: t.minuto, ruta: t.ruta })));
+
+    // Recibir una nueva programación desde la interfaz
+    socket.on('programar_musica', (data) => {
+        const { hora, minuto, ruta } = data;
+        const cronExpression = `${minuto} ${hora} * * *`;
+        
+        const tareaCron = cron.schedule(cronExpression, () => {
+            console.log(`Ejecutando música: ${ruta}`);
+            
+            // Comando para Windows. En Linux/Mac usa 'cvlc', 'mpg123' o 'afplay'
+            exec(`start "" "${ruta}"`, (error) => {
+                if(error) console.error("Error al reproducir:", error);
+            });
+            
+            // Avisar a la interfaz que la música empezó
+            io.emit('reproduciendo', { ruta, hora, minuto });
+        });
+
+        const nuevaTarea = { id: Date.now(), hora, minuto, ruta, cronObj: tareaCron };
+        tareasProgramadas.push(nuevaTarea);
+        
+        io.emit('tareas_actualizadas', tareasProgramadas.map(t => ({ id: t.id, hora: t.hora, minuto: t.minuto, ruta: t.ruta })));
+    });
+
+    // Cancelar una tarea existente
+    socket.on('cancelar_tarea', (id) => {
+        const index = tareasProgramadas.findIndex(t => t.id === id);
+        if (index !== -1) {
+            tareasProgramadas[index].cronObj.stop(); // Detener el cron
+            tareasProgramadas.splice(index, 1); // Eliminar de la lista
+            io.emit('tareas_actualizadas', tareasProgramadas.map(t => ({ id: t.id, hora: t.hora, minuto: t.minuto, ruta: t.ruta })));
+        }
+    });
+});
+
+server.listen(3001, () => {
+    console.log('Backend de música corriendo en el puerto 3001');
+});
