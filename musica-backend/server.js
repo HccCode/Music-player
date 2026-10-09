@@ -19,12 +19,13 @@ let tareasProgramadas = [];
 let tokenRefreshInterval = null;
 let monitorReproduccion = null;
 
-// Convertidor automático de enlaces de Spotify
 function parseSpotifyUri(input) {
     let uri = input.trim();
     if (uri.includes('spotify.com')) {
         const match = uri.match(/(track|playlist|album)\/([a-zA-Z0-9]+)/);
-        if (match) return `spotify:${match[1]}:${match[2]}`;
+        if (match) {
+            return `spotify:${match[1]}:${match[2]}`;
+        }
     }
     return uri;
 }
@@ -69,7 +70,9 @@ app.get('/callback', (req, res) => {
                       activo: estado.body.is_playing,
                       cancion: estado.body.item.name,
                       artista: estado.body.item.artists.map(a => a.name).join(', '),
-                      imagen: estado.body.item.album.images[0]?.url
+                      imagen: estado.body.item.album.images[0]?.url,
+                      progreso: estado.body.progress_ms,   // <-- NUEVO: Tiempo actual
+                      duracion: estado.body.item.duration_ms // <-- NUEVO: Duración total
                   });
               } else {
                   io.emit('estado_reproduccion', { activo: false });
@@ -94,7 +97,9 @@ io.on('connection', (socket) => {
             const dispositivos = await spotifyApi.getMyDevices();
             if (!dispositivos.body.devices || dispositivos.body.devices.length === 0) return console.log("⚠️ No hay dispositivos abiertos.");
             
-            const deviceToPlay = dispositivos.body.devices.find(d => d.is_active) 
+            // PRIORIDAD: Web Player -> Activo -> Computadora -> Primero en la lista
+            const deviceToPlay = dispositivos.body.devices.find(d => d.name.toLowerCase().includes('web player'))
+                              || dispositivos.body.devices.find(d => d.is_active) 
                               || dispositivos.body.devices.find(d => d.type === 'Computer') 
                               || dispositivos.body.devices[0];
             
@@ -109,36 +114,50 @@ io.on('connection', (socket) => {
 
     socket.on('control_pausa', async () => { 
         if (!spotifyApi.getAccessToken()) return;
-        try { await spotifyApi.pause(); } catch(e){ console.error('\n❌ Error en Pausa:', e); } 
+        try { await spotifyApi.pause(); } catch(e){} 
     });
     socket.on('control_siguiente', async () => { 
         if (!spotifyApi.getAccessToken()) return;
-        try { await spotifyApi.skipToNext(); } catch(e){ console.error('\n❌ Error en Siguiente:', e); } 
+        try { await spotifyApi.skipToNext(); } catch(e){} 
     });
     socket.on('control_anterior', async () => { 
         if (!spotifyApi.getAccessToken()) return;
-        try { await spotifyApi.skipToPrevious(); } catch(e){ console.error('\n❌ Error en Anterior:', e); } 
+        try { await spotifyApi.skipToPrevious(); } catch(e){} 
     });
 
-    // LEER PLAYLIST
+    // LEER PLAYLIST, ÁLBUM O CANCIÓN
     socket.on('obtener_playlist', async (rutaOriginal) => {
         if (!spotifyApi.getAccessToken()) return socket.emit('lista_canciones_resultado', ['⚠️ Inicia sesión en /login primero.']);
         try {
             const uri = parseSpotifyUri(rutaOriginal);
+            
             if (uri.includes('playlist')) {
                 const playlistId = uri.split(':')[2];
                 const data = await spotifyApi.getPlaylistTracks(playlistId);
                 const tracks = data.body.items.map((item, index) => `${index + 1}. ${item.track.name} - ${item.track.artists[0].name}`);
                 socket.emit('lista_canciones_resultado', tracks);
+                
+            } else if (uri.includes('track')) {
+                const trackId = uri.split(':')[2];
+                const data = await spotifyApi.getTrack(trackId);
+                const trackInfo = `${data.body.name} - ${data.body.artists[0].name}`;
+                socket.emit('lista_canciones_resultado', [trackInfo]);
+                
+            } else if (uri.includes('album')) {
+                const albumId = uri.split(':')[2];
+                const data = await spotifyApi.getAlbumTracks(albumId);
+                const tracks = data.body.items.map((item, index) => `${index + 1}. ${item.name} - ${item.artists[0].name}`);
+                socket.emit('lista_canciones_resultado', tracks);
+                
             } else {
-                socket.emit('lista_canciones_resultado', ['El enlace es de una sola canción.']);
+                socket.emit('lista_canciones_resultado', ['Formato de enlace no reconocido.']);
             }
         } catch (error) {
-            socket.emit('lista_canciones_resultado', ['Error al cargar la playlist. Verifica que sea pública.']);
+            socket.emit('lista_canciones_resultado', ['Error al cargar la información. Verifica el enlace.']);
         }
     });
 
-    // ALARMA PROGRAMADA CON DIAGNÓSTICO ESTRICTO
+    // ALARMA PROGRAMADA CON PRIORIDAD AL REPRODUCTOR WEB
     socket.on('programar_musica', (data) => {
         const { hora, minuto, ruta } = data;
         const uriSpotify = parseSpotifyUri(ruta);
@@ -147,60 +166,69 @@ io.on('connection', (socket) => {
             console.log(`\n--- INICIANDO ALARMA DE LAS ${hora}:${minuto} ---`);
             
             if (!spotifyApi.getAccessToken()) {
-                console.error("❌ FALLO CRÍTICO: El servidor no tiene sesión de Spotify. Debes entrar a http://127.0.0.1:3001/login");
+                console.error("❌ FALLO CRÍTICO: El servidor no tiene sesión. Entra a http://127.0.0.1:3001/login");
                 return;
             }
 
             let deviceId = null;
+            let isDeviceActive = false; 
 
-            // PASO 1 y 2: Buscar y despertar dispositivo
             try {
                 console.log("1. Buscando dispositivos en tu cuenta...");
                 const dispositivos = await spotifyApi.getMyDevices();
                 
                 if (!dispositivos.body.devices || dispositivos.body.devices.length === 0) {
-                    console.error('❌ Fallo: Ningún dispositivo encontrado. Abre la app de Spotify.');
+                    console.error('❌ Fallo: Ningún dispositivo encontrado. Abre la app o la web de Spotify.');
                     return;
                 }
 
-                const deviceToPlay = dispositivos.body.devices.find(d => d.is_active) 
+                // NUEVO ORDEN DE PRIORIDAD: Siempre busca el reproductor web primero
+                const deviceToPlay = dispositivos.body.devices.find(d => d.name.toLowerCase().includes('web player'))
+                                  || dispositivos.body.devices.find(d => d.is_active) 
                                   || dispositivos.body.devices.find(d => d.type === 'Computer') 
                                   || dispositivos.body.devices[0];
                                   
                 deviceId = deviceToPlay.id;
-                console.log(`✅ Dispositivo encontrado: ${deviceToPlay.name} (Activo: ${deviceToPlay.is_active})`);
+                isDeviceActive = deviceToPlay.is_active; 
                 
-                if (!deviceToPlay.is_active) {
-                    console.log("2. Despertando dispositivo...");
-                    await spotifyApi.transferMyPlayback([deviceId]);
-                    await esperar(2000); 
-                    console.log("✅ Dispositivo despertado.");
+                console.log(`✅ Dispositivo encontrado: ${deviceToPlay.name} (Activo: ${isDeviceActive})`);
+                
+                if (isDeviceActive) {
+                    console.log("2. Dispositivo activo. Pausando el reproductor para limpiar el caché...");
+                    try { await spotifyApi.pause({ device_id: deviceId }); } catch(e){}
+                    await esperar(1000); 
                 } else {
-                    console.log("2. El dispositivo ya está activo.");
+                    console.log("2. Dispositivo inactivo. Despertándolo forzosamente...");
+                    await spotifyApi.transferMyPlayback([deviceId]);
+                    await esperar(2500); 
                 }
 
             } catch (err) {
-                console.error("\n❌ Error en la detección de Dispositivos:\n", err);
+                console.error("❌ Error en el PASO 1 o 2 (Dispositivos):", err.body ? err.body.error : err);
                 return; 
             }
 
-            // PASO 3: Enviar la canción
             try {
-                console.log(`3. Enviando orden de Play con URI: ${uriSpotify}`);
+                console.log(`3. Preparando orden de Play -> URI: ${uriSpotify}`);
                 const esTrack = uriSpotify.includes('track');
                 
-                let opcionesPlay = { device_id: deviceId };
+                let opcionesPlay = { device_id: deviceId }; 
+                
                 if (esTrack) {
                     opcionesPlay.uris = [uriSpotify];
                 } else {
                     opcionesPlay.context_uri = uriSpotify;
                 }
                 
+                console.log("➡️ Opciones exactas enviadas a Spotify:", opcionesPlay);
                 await spotifyApi.play(opcionesPlay);
-                console.log(`✅ 🎵 ¡Música sonando correctamente!`);
+                console.log(`✅ 🎵 ¡Música sonando correctamente en la versión Web!`);
 
             } catch (err) {
-                console.error(`\n❌ Error en la etapa de Reproducción:\n`, err);
+                console.error(`❌ Error en el PASO 3 (Reproducción):`, err.message || err.statusCode || "Error desconocido");
+                if (err.body && err.body.error) {
+                    console.error("Detalle de Spotify:", err.body.error);
+                }
             }
         });
 

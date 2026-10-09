@@ -1,111 +1,214 @@
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;700&display=swap');
+
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
-
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
-
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
-
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
+  --spotify-green: #1DB954;
+  --spotify-green-hover: #1ed760;
+  --spotify-black: #121212;
+  --spotify-base: #000000;
+  --spotify-dark-grey: #181818;
+  --spotify-light-grey: #282828;
+  --spotify-text-main: #FFFFFF;
+  --spotify-text-sub: #A7A7A7;
 }
 
 body {
+  background-color: var(--spotify-base);
+  color: var(--spotify-text-main);
+  font-family: 'Montserrat', sans-serif;
   margin: 0;
-}
-
-#root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
+  padding: 0;
   display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
+  justify-content: center;
+  min-height: 100vh;
 }
 
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
+.app-container {
+  width: 100%;
+  max-width: 650px;
+  padding: 50px 20px;
 }
 
 h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
-}
-p {
-  margin: 0;
+  font-size: 2.2rem;
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 5px;
+  letter-spacing: -1px;
 }
 
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
+.subtitle {
+  color: var(--spotify-text-sub);
+  text-align: center;
+  font-size: 0.9rem;
+  margin-bottom: 40px;
+  font-weight: 500;
+}
+
+/* Tarjetas (Paneles) */
+.spotify-card {
+  background-color: var(--spotify-dark-grey);
+  border-radius: 8px;
+  padding: 24px;
+  margin-bottom: 24px;
+  transition: background-color 0.3s ease;
+}
+
+.spotify-card:hover {
+  background-color: var(--spotify-light-grey);
+}
+
+.card-title {
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: 20px;
+  text-align: center;
+  color: var(--spotify-text-main);
+}
+
+/* Botones */
+.btn {
+  background-color: transparent;
+  color: var(--spotify-text-main);
+  border: 1px solid var(--spotify-text-sub);
+  border-radius: 500px;
+  padding: 8px 24px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-family: 'Montserrat', sans-serif;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn:hover {
+  border-color: var(--spotify-text-main);
+  transform: scale(1.04);
+}
+
+.btn-play {
+  background-color: var(--spotify-text-main);
+  color: var(--spotify-black);
+  border: none;
+  padding: 12px 32px;
+  font-size: 1rem;
+}
+
+.btn-play:hover {
+  background-color: #f6f6f6;
+  transform: scale(1.04);
+  border-color: transparent;
+}
+
+.btn-primary {
+  background-color: var(--spotify-green);
+  color: var(--spotify-black);
+  border: none;
+  padding: 12px 24px;
+}
+
+.btn-primary:hover {
+  background-color: var(--spotify-green-hover);
+  transform: scale(1.04);
+  border-color: transparent;
+}
+
+.btn-small {
+  padding: 6px 16px;
+  font-size: 0.75rem;
+}
+
+/* Controles en vivo */
+.live-controls {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 20px;
+}
+
+/* Formularios y Entradas */
+.form-row {
+  display: flex;
+  gap: 15px;
+  align-items: flex-end;
+}
+
+.input-group {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.input-group label {
+  font-size: 0.75rem;
+  color: var(--spotify-text-sub);
+  margin-bottom: 8px;
+  font-weight: 700;
+}
+
+.spotify-input {
+  background-color: #2A2A2A;
+  border: 1px solid transparent;
+  color: var(--spotify-text-main);
+  padding: 12px 16px;
   border-radius: 4px;
-  color: var(--text-h);
+  font-family: 'Montserrat', sans-serif;
+  font-size: 0.9rem;
+  transition: all 0.2s ease;
 }
 
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+.spotify-input:focus {
+  outline: none;
+  border: 1px solid #727272;
+  background-color: #333;
+}
+
+.spotify-input::placeholder {
+  color: var(--spotify-text-sub);
+}
+
+.input-time {
+  max-width: 120px;
+}
+
+/* Tareas Programadas */
+.task-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: transparent;
+  padding: 12px 0;
+  border-bottom: 1px solid #2A2A2A;
+}
+
+.task-item:last-child {
+  border-bottom: none;
+}
+
+.task-info {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  overflow: hidden;
+}
+
+.task-time {
+  color: var(--spotify-green);
+  font-weight: 700;
+  font-size: 1.1rem;
+}
+
+.task-url {
+  color: var(--spotify-text-sub);
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.task-actions {
+  display: flex;
+  gap: 10px;
 }
