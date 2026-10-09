@@ -8,10 +8,10 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
-// Configuración de Spotify (Con el Client ID ya corregido)
+// Configuración de Spotify
 const spotifyApi = new SpotifyWebApi({
-  clientId: '1f6b538e02e94badaf70e028df6b0f56', // Reemplaza con tu Client ID
-  clientSecret: '46f576c4e34a4609b1e94ac63672c4e1', // Reemplaza con tu Client Secret
+  clientId: '2cdbade90a534da1b99991ce51b0c34f', 
+  clientSecret: '090fd7a091f441a491f0c8c239bcffe0', 
   redirectUri: 'http://127.0.0.1:3001/callback'
 });
 
@@ -28,7 +28,9 @@ function parseSpotifyUri(input) {
     return input;
 }
 
-// Rutas de Autenticación
+const esperar = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// ----- RUTAS DE AUTENTICACIÓN -----
 app.get('/login', (req, res) => {
   const scopes = [
       'user-modify-playback-state', 
@@ -46,9 +48,8 @@ app.get('/callback', (req, res) => {
     (data) => {
       spotifyApi.setAccessToken(data.body['access_token']);
       spotifyApi.setRefreshToken(data.body['refresh_token']);
-      console.log('¡Spotify autenticado correctamente!');
+      console.log('✅ ¡Spotify autenticado correctamente!');
 
-      // Mantener el token activo
       if(tokenRefreshInterval) clearInterval(tokenRefreshInterval);
       tokenRefreshInterval = setInterval(() => {
         spotifyApi.refreshAccessToken().then(
@@ -57,7 +58,6 @@ app.get('/callback', (req, res) => {
         );
       }, 50 * 60 * 1000);
 
-      // Monitorear la canción actual cada 3 segundos
       if(monitorReproduccion) clearInterval(monitorReproduccion);
       monitorReproduccion = setInterval(async () => {
           try {
@@ -72,53 +72,46 @@ app.get('/callback', (req, res) => {
               } else {
                   io.emit('estado_reproduccion', { activo: false });
               }
-          } catch (error) {
-              // Evitamos llenar la consola si Spotify se cierra
-          }
+          } catch (error) {}
       }, 3000);
 
-      res.send('<h2 style="color:#1DB954; font-family:sans-serif; text-align:center; margin-top:50px;">¡Autenticación Exitosa!<br>Ya puedes cerrar esta ventana y volver al Dashboard.</h2>');
+      res.send('<h2 style="color:#1DB954; text-align:center; margin-top:50px; font-family:sans-serif;">¡Autenticación Exitosa!<br>Vuelve a tu dashboard.</h2>');
     },
-    (err) => {
-        console.error('Error en autenticación', err);
-        res.send('Error en la autenticación.');
-    }
+    (err) => res.send('Error en la autenticación.')
   );
 });
 
-// Sockets y Lógica Principal
+// ----- LÓGICA PRINCIPAL -----
 io.on('connection', (socket) => {
     socket.emit('tareas_actualizadas', tareasProgramadas.map(t => ({ id: t.id, hora: t.hora, minuto: t.minuto, ruta: t.ruta })));
 
-    // Controles en vivo con selección automática de dispositivo
+    // CONTROLES EN VIVO
     socket.on('control_play', async () => { 
         try { 
             const dispositivos = await spotifyApi.getMyDevices();
-            if (!dispositivos.body.devices || dispositivos.body.devices.length === 0) {
-                return console.log("Advertencia: Abre la app de Spotify primero.");
+            if (!dispositivos.body.devices || dispositivos.body.devices.length === 0) return;
+            const deviceToPlay = dispositivos.body.devices.find(d => d.is_active) || dispositivos.body.devices[0];
+            
+            if (!deviceToPlay.is_active) {
+                await spotifyApi.transferMyPlayback([deviceToPlay.id]); 
+                await esperar(1500);
             }
-            const deviceId = dispositivos.body.devices[0].id;
-            await spotifyApi.play({ device_id: deviceId }); 
+            await spotifyApi.play({ device_id: deviceToPlay.id }); 
         } 
-        catch(e){ console.error('Error en Play:', e.body ? e.body.error : e); } 
+        catch(e){ console.error('Error en Play:', e.message || e); } 
     });
 
     socket.on('control_pausa', async () => { 
-        try { await spotifyApi.pause(); } 
-        catch(e){ console.error('Error en Pausa:', e.body ? e.body.error : e); } 
+        try { await spotifyApi.pause(); } catch(e){} 
     });
-
     socket.on('control_siguiente', async () => { 
-        try { await spotifyApi.skipToNext(); } 
-        catch(e){ console.error('Error en Siguiente:', e.body ? e.body.error : e); } 
+        try { await spotifyApi.skipToNext(); } catch(e){} 
     });
-
     socket.on('control_anterior', async () => { 
-        try { await spotifyApi.skipToPrevious(); } 
-        catch(e){ console.error('Error en Anterior:', e.body ? e.body.error : e); } 
+        try { await spotifyApi.skipToPrevious(); } catch(e){} 
     });
 
-    // Obtener contenido de lista de reproducción
+    // LEER PLAYLIST
     socket.on('obtener_playlist', async (rutaOriginal) => {
         try {
             const uri = parseSpotifyUri(rutaOriginal);
@@ -128,47 +121,72 @@ io.on('connection', (socket) => {
                 const tracks = data.body.items.map((item, index) => `${index + 1}. ${item.track.name} - ${item.track.artists[0].name}`);
                 socket.emit('lista_canciones_resultado', tracks);
             } else {
-                socket.emit('lista_canciones_resultado', ['El enlace proporcionado pertenece a una canción individual.']);
+                socket.emit('lista_canciones_resultado', ['El enlace es de una sola canción.']);
             }
         } catch (error) {
-            socket.emit('lista_canciones_resultado', ['Error al cargar la playlist. Asegúrate de que no sea privada.']);
+            socket.emit('lista_canciones_resultado', ['Error al cargar la playlist.']);
         }
     });
 
-    // Tarea Programada (Alarma)
+    // ALARMA PROGRAMADA CON DIAGNÓSTICO EXACTO
     socket.on('programar_musica', (data) => {
         const { hora, minuto, ruta } = data;
         const uriSpotify = parseSpotifyUri(ruta);
         
         const tareaCron = cron.schedule(`${minuto} ${hora} * * *`, async () => {
+            console.log(`\n--- INICIANDO ALARMA DE LAS ${hora}:${minuto} ---`);
+            let deviceId = null;
+
+            // PASO 1 y 2: Buscar y despertar dispositivo
             try {
-                // Buscamos aparatos abiertos y forzamos la reproducción en uno de ellos
+                console.log("1. Buscando dispositivos en tu cuenta...");
                 const dispositivos = await spotifyApi.getMyDevices();
                 
                 if (!dispositivos.body.devices || dispositivos.body.devices.length === 0) {
-                    console.error('Alarma fallida: No hay ningún dispositivo con Spotify abierto para reproducir la música.');
+                    console.error('❌ Fallo: Ningún dispositivo encontrado. Abre la app de Spotify.');
                     return;
                 }
 
                 const deviceToPlay = dispositivos.body.devices.find(d => d.is_active) || dispositivos.body.devices[0];
-                const esTrack = uriSpotify.includes('track');
-                const opciones = esTrack ? { uris: [uriSpotify] } : { context_uri: uriSpotify };
+                deviceId = deviceToPlay.id;
+                console.log(`✅ Dispositivo encontrado: ${deviceToPlay.name} (Activo: ${deviceToPlay.is_active})`);
                 
-                opciones.device_id = deviceToPlay.id; // Fuerza el dispositivo
+                if (!deviceToPlay.is_active) {
+                    console.log("2. Despertando dispositivo...");
+                    await spotifyApi.transferMyPlayback([deviceId]);
+                    await esperar(1500); // Pausa de 1.5s
+                    console.log("✅ Dispositivo despertado.");
+                } else {
+                    console.log("2. El dispositivo ya está activo.");
+                }
 
-                await spotifyApi.play(opciones);
-                console.log(`[${hora}:${minuto}] ¡Música iniciada correctamente!`);
-            } catch (error) {
-                console.error(`[${hora}:${minuto}] Error al reproducir la alarma:`, error.body ? error.body.error : error);
+          } catch (err) {
+             console.error("❌ Error en el PASO 1 o 2 (Dispositivos):", err.body ? err.body.error : err);
+             return; 
+         }
+
+            // PASO 3: Enviar la canción
+            try {
+                console.log(`3. Enviando orden de Play con URI: ${uriSpotify}`);
+                const esTrack = uriSpotify.includes('track');
+                const opcionesPlay = esTrack ? { uris: [uriSpotify] } : { context_uri: uriSpotify };
+                
+                await spotifyApi.play({ device_id: deviceId, ...opcionesPlay });
+                console.log(`✅ 🎵 ¡Música sonando correctamente!`);
+
+            } catch (err) {
+                console.error(`❌ Error en el PASO 3 (Reproducción):`, err.message || err.statusCode || "Error desconocido");
+                if (err.body && err.body.error) {
+                    console.error("Detalle de Spotify:", err.body.error);
+                }
             }
         });
 
         tareasProgramadas.push({ id: Date.now(), hora, minuto, ruta, cronObj: tareaCron });
         io.emit('tareas_actualizadas', tareasProgramadas.map(t => ({ id: t.id, hora: t.hora, minuto: t.minuto, ruta: t.ruta })));
-        console.log(`Nueva música programada a las ${hora}:${minuto}`);
+        console.log(`⏰ Nueva alarma configurada a las ${hora}:${minuto}`);
     });
 
-    // Cancelar programación
     socket.on('cancelar_tarea', (id) => {
         const index = tareasProgramadas.findIndex(t => t.id === id);
         if (index !== -1) {
@@ -183,7 +201,4 @@ server.listen(3001, () => {
     console.log('==================================================');
     console.log(' Backend corriendo en http://localhost:3001       ');
     console.log('==================================================');
-    console.log('PASO 1: Entra a http://127.0.0.1:3001/login');
-    console.log('PASO 2: Abre la app de Spotify en tu PC o Celular');
-    console.log('PASO 3: Controla la música desde tu Panel Web');
 });
