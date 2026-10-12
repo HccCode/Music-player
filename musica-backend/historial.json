@@ -1,0 +1,23 @@
+[
+    {
+        "ruta": "https://open.spotify.com/intl-es/track/7KsZHCfOitA5V9oQYVdltG?si=c544833c2829414e",
+        "nombre": "Everything Now",
+        "subtitulo": "Arcade Fire",
+        "imagen": "https://i.scdn.co/image/ab67616d0000b273e4cbfd77ad5036667c446dbe",
+        "tipo": "Canción"
+    },
+    {
+        "ruta": "https://open.spotify.com/playlist/6QACoC8eHNyGXKZjmbxs2O?si=eb942a7bacb647ab",
+        "nombre": "A Day To Remember – Homesick",
+        "subtitulo": "De Hector Montaño",
+        "imagen": "https://mosaic.scdn.co/640/ab67616d00001e020b02af77159866fe3e011c76ab67616d00001e029233270031da763169e5f96cab67616d00001e02bdad624201f2844ff0f45623ab67616d00001e02faa5f77ae241454fae86d480",
+        "tipo": "Playlist"
+    },
+    {
+        "ruta": "https://open.spotify.com/intl-es/album/7vfuTRXIAYJz5Uc8SddnTr?si=c4d1aeb6ad604346",
+        "nombre": "Nightmare",
+        "subtitulo": "Avenged Sevenfold",
+        "imagen": "https://i.scdn.co/image/ab67616d0000b273c34064a3c5e4a25892a091f3",
+        "tipo": "Álbum"
+    }
+]

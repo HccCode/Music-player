@@ -3,252 +3,752 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cron = require('node-cron');
 const SpotifyWebApi = require('spotify-web-api-node');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
-// Configuración de Spotify
+function obtenerIpLocal() {
+    const interfaces = os.networkInterfaces();
+    let ipFallback = '127.0.0.1';
+    for (const name of Object.keys(interfaces)) {
+        for (const iface of interfaces[name]) {
+            if (iface.family === 'IPv4' && !iface.internal) {
+                if (iface.address.startsWith('192.168.') || iface.address.startsWith('10.')) {
+                    return iface.address;
+                }
+                ipFallback = iface.address;
+            }
+        }
+    }
+    return ipFallback;
+}
+
+// --- SISTEMAS DE PERSISTENCIA ---
+const configPath = path.join(__dirname, 'config.json');
+const tareasPath = path.join(__dirname, 'tareas.json');
+const historialPath = path.join(__dirname, 'historial.json'); 
+
+let appConfig = { 
+    clientId: '1f6b538e02e94badaf70e028df6b0f56', 
+    clientSecret: '46f576c4e34a4609b1e94ac63672c4e1',
+    preferredDeviceId: '',
+    refreshToken: ''
+};
+
+if (fs.existsSync(configPath)) {
+    try { appConfig = { ...appConfig, ...JSON.parse(fs.readFileSync(configPath, 'utf8')) }; } 
+    catch (e) {}
+} else { fs.writeFileSync(configPath, JSON.stringify(appConfig, null, 4)); }
+
+const DEFAULT_IMG = 'https://i.scdn.co/image/ab6761610000e5eb55d39ab9c21d506aa52f7021';
+const DIAS_TODOS = [1, 2, 3, 4, 5, 6, 0];
+
+// Cargar y normalizar Historial
+let historial = [];
+if (fs.existsSync(historialPath)) {
+    try { 
+        const rawHistorial = JSON.parse(fs.readFileSync(historialPath, 'utf8')); 
+        historial = rawHistorial.map(item => typeof item === 'string' 
+            ? { ruta: item, nombre: item, subtitulo: 'Enlace guardado', imagen: DEFAULT_IMG, tipo: 'Enlace' } 
+            : item
+        );
+    } catch (e) {}
+}
+
 const spotifyApi = new SpotifyWebApi({
-  clientId: '1f6b538e02e94badaf70e028df6b0f56', 
-  clientSecret: '46f576c4e34a4609b1e94ac63672c4e1', 
+  clientId: appConfig.clientId, 
+  clientSecret: appConfig.clientSecret, 
   redirectUri: 'http://127.0.0.1:3001/callback'
 });
 
 let tareasProgramadas = [];
 let tokenRefreshInterval = null;
 let monitorReproduccion = null;
+let fadeInterval = null;
+let sesionActiva = false;
 
 function parseSpotifyUri(input) {
     let uri = input.trim();
     if (uri.includes('spotify.com')) {
         const match = uri.match(/(track|playlist|album)\/([a-zA-Z0-9]+)/);
-        if (match) {
-            return `spotify:${match[1]}:${match[2]}`;
-        }
+        if (match) return `spotify:${match[1]}:${match[2]}`;
     }
     return uri;
 }
 
 const esperar = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+function iniciarFadeInVolumen(deviceId, volInicial = 10, volFinal = 80, duracionSegundos = 30) {
+    if (fadeInterval) clearInterval(fadeInterval);
+    let volActual = volInicial;
+    const pasos = 6;
+    const incremento = Math.round((volFinal - volInicial) / pasos);
+    const intervaloMs = Math.round((duracionSegundos * 1000) / pasos);
+
+    fadeInterval = setInterval(async () => {
+        volActual += incremento;
+        if (volActual >= volFinal) {
+            volActual = volFinal;
+            clearInterval(fadeInterval);
+            fadeInterval = null;
+        }
+        try {
+            await spotifyApi.setVolume(volActual, { device_id: deviceId });
+        } catch (e) {
+            clearInterval(fadeInterval);
+            fadeInterval = null;
+        }
+    }, intervaloMs);
+}
+
+async function obtenerMetadatosRuta(rutaOriginal) {
+    const fallback = {
+        ruta: rutaOriginal,
+        nombre: rutaOriginal,
+        subtitulo: 'Enlace de Spotify',
+        imagen: DEFAULT_IMG,
+        tipo: 'Enlace'
+    };
+
+    if (!spotifyApi.getAccessToken()) return fallback;
+
+    try {
+        const uri = parseSpotifyUri(rutaOriginal);
+        const partes = uri.split(':');
+        const tipoUri = partes[1];
+        const id = partes[2];
+
+        if (tipoUri === 'track') {
+            const data = await spotifyApi.getTrack(id);
+            return {
+                ruta: rutaOriginal,
+                nombre: data.body.name,
+                subtitulo: data.body.artists.map(a => a.name).join(', '),
+                imagen: data.body.album.images[0]?.url || DEFAULT_IMG,
+                tipo: 'Canción'
+            };
+        } else if (tipoUri === 'playlist') {
+            const data = await spotifyApi.getPlaylist(id);
+            return {
+                ruta: rutaOriginal,
+                nombre: data.body.name,
+                subtitulo: `De ${data.body.owner.display_name || 'Spotify'}`,
+                imagen: data.body.images[0]?.url || DEFAULT_IMG,
+                tipo: 'Playlist'
+            };
+        } else if (tipoUri === 'album') {
+            const data = await spotifyApi.getAlbum(id);
+            return {
+                ruta: rutaOriginal,
+                nombre: data.body.name,
+                subtitulo: data.body.artists.map(a => a.name).join(', '),
+                imagen: data.body.images[0]?.url || DEFAULT_IMG,
+                tipo: 'Álbum'
+            };
+        }
+    } catch (e) {}
+    return fallback;
+}
+
+async function actualizarMetadatosPendientes() {
+    if (!spotifyApi.getAccessToken()) return;
+    let huboCambiosTareas = false;
+    let huboCambiosHistorial = false;
+
+    for (let t of tareasProgramadas) {
+        if (!t.nombre || t.nombre === t.ruta || t.subtitulo === 'Enlace guardado') {
+            const meta = await obtenerMetadatosRuta(t.ruta);
+            t.nombre = meta.nombre;
+            t.subtitulo = meta.subtitulo;
+            t.imagen = meta.imagen;
+            t.tipo = meta.tipo;
+            huboCambiosTareas = true;
+        }
+    }
+
+    for (let i = 0; i < historial.length; i++) {
+        let h = historial[i];
+        if (!h.nombre || h.nombre === h.ruta || h.subtitulo === 'Enlace guardado') {
+            const meta = await obtenerMetadatosRuta(h.ruta);
+            historial[i] = meta;
+            huboCambiosHistorial = true;
+        }
+    }
+
+    if (huboCambiosTareas) {
+        guardarTareasEnArchivo();
+        emitirTareas();
+    }
+    if (huboCambiosHistorial) {
+        fs.writeFileSync(historialPath, JSON.stringify(historial, null, 4));
+        io.emit('historial_actualizado', historial);
+    }
+}
+
+async function getActiveDevice() {
+    const dispositivos = await spotifyApi.getMyDevices();
+    const lista = dispositivos.body.devices || [];
+    if (lista.length === 0) return null;
+
+    if (appConfig.preferredDeviceId) {
+        const preferido = lista.find(d => d.id === appConfig.preferredDeviceId);
+        if (preferido) return preferido;
+    }
+
+    return lista.find(d => d.name.includes('Mi Panel Musical'))
+        || lista.find(d => d.name.toLowerCase().includes('web player'))
+        || lista.find(d => d.is_active) 
+        || lista.find(d => d.type === 'Computer') 
+        || lista[0];
+}
+
+async function emitirDispositivos() {
+    if (!spotifyApi.getAccessToken()) return;
+    try {
+        const data = await spotifyApi.getMyDevices();
+        io.emit('dispositivos_actualizados', {
+            dispositivos: data.body.devices || [],
+            preferredDeviceId: appConfig.preferredDeviceId || ''
+        });
+    } catch (e) {}
+}
+
+function iniciarServiciosSpotify() {
+    sesionActiva = true;
+    const tokenActual = spotifyApi.getAccessToken() || '';
+    io.emit('estado_sesion', { autenticado: true, accessToken: tokenActual });
+
+    if (tokenRefreshInterval) clearInterval(tokenRefreshInterval);
+    tokenRefreshInterval = setInterval(async () => {
+        try {
+            const data = await spotifyApi.refreshAccessToken();
+            const nuevoToken = data.body['access_token'];
+            spotifyApi.setAccessToken(nuevoToken);
+            if (data.body['refresh_token']) {
+                spotifyApi.setRefreshToken(data.body['refresh_token']);
+                appConfig.refreshToken = data.body['refresh_token'];
+                fs.writeFileSync(configPath, JSON.stringify(appConfig, null, 4));
+            }
+            io.emit('estado_sesion', { autenticado: true, accessToken: nuevoToken });
+        } catch (err) {}
+    }, 50 * 60 * 1000);
+
+    if (monitorReproduccion) clearInterval(monitorReproduccion);
+    monitorReproduccion = setInterval(async () => {
+        if (!spotifyApi.getAccessToken()) return;
+        try {
+            const [estado, dispositivosData] = await Promise.all([
+                spotifyApi.getMyCurrentPlaybackState(),
+                spotifyApi.getMyDevices()
+            ]);
+
+            io.emit('dispositivos_actualizados', {
+                dispositivos: dispositivosData.body?.devices || [],
+                preferredDeviceId: appConfig.preferredDeviceId || ''
+            });
+
+            if (estado.body && estado.body.item) {
+                io.emit('estado_reproduccion', {
+                    activo: estado.body.is_playing,
+                    cancion: estado.body.item.name,
+                    artista: estado.body.item.artists.map(a => a.name).join(', '),
+                    imagen: estado.body.item.album.images[0]?.url,
+                    progreso: estado.body.progress_ms,
+                    duracion: estado.body.item.duration_ms,
+                    volumen: estado.body.device?.volume_percent ?? 80,
+                    dispositivoActivo: estado.body.device?.name || ''
+                });
+            } else {
+                io.emit('estado_reproduccion', { activo: false });
+            }
+        } catch (error) {}
+    }, 3000);
+}
+
+async function intentarAutoLogin() {
+    if (!appConfig.refreshToken) return false;
+    try {
+        spotifyApi.setRefreshToken(appConfig.refreshToken);
+        const data = await spotifyApi.refreshAccessToken();
+        spotifyApi.setAccessToken(data.body['access_token']);
+        if (data.body['refresh_token']) {
+            spotifyApi.setRefreshToken(data.body['refresh_token']);
+            appConfig.refreshToken = data.body['refresh_token'];
+            fs.writeFileSync(configPath, JSON.stringify(appConfig, null, 4));
+        }
+        console.log('🔑 ¡Auto-Login exitoso! Sesión de Spotify activa.');
+        iniciarServiciosSpotify();
+        await actualizarMetadatosPendientes();
+        await emitirDispositivos();
+        return true;
+    } catch (e) {
+        sesionActiva = false;
+        io.emit('estado_sesion', { autenticado: false, accessToken: '' });
+        return false;
+    }
+}
+
+// --- LÓGICA DE ALARMAS Y CRON ---
+function crearTareaCron(hora, minuto, ruta, dias = DIAS_TODOS, activa = true, fadeIn = false) {
+    const uriSpotify = parseSpotifyUri(ruta);
+    const diasValidos = Array.isArray(dias) && dias.length > 0 ? dias : DIAS_TODOS;
+    const diasCron = diasValidos.length === 7 ? '*' : diasValidos.join(',');
+
+    const job = cron.schedule(`${minuto} ${hora} * * ${diasCron}`, async () => {
+        if (!spotifyApi.getAccessToken()) return;
+
+        let deviceId = null;
+        try {
+            const device = await getActiveDevice();
+            if (!device) return;
+            deviceId = device.id;
+            
+            if (device.is_active) {
+                try { await spotifyApi.pause({ device_id: deviceId }); } catch(e){}
+                await esperar(1000); 
+            } else {
+                await spotifyApi.transferMyPlayback([deviceId]);
+                await esperar(2200); 
+            }
+
+            if (fadeIn) {
+                try {
+                    await spotifyApi.setVolume(10, { device_id: deviceId });
+                    await esperar(400);
+                } catch(e) {}
+            }
+        } catch (err) { return; }
+
+        try {
+            const esTrack = uriSpotify.includes('track');
+            let opcionesPlay = { device_id: deviceId }; 
+            if (esTrack) opcionesPlay.uris = [uriSpotify];
+            else opcionesPlay.context_uri = uriSpotify;
+            
+            await spotifyApi.play(opcionesPlay);
+
+            if (fadeIn) {
+                iniciarFadeInVolumen(deviceId, 10, 80, 30);
+            }
+        } catch (err) {}
+    });
+
+    if (!activa) job.stop();
+    return job;
+}
+
+function serializarTareas() {
+    return tareasProgramadas.map(t => ({
+        id: t.id,
+        hora: t.hora,
+        minuto: t.minuto,
+        ruta: t.ruta,
+        nombre: t.nombre || t.ruta,
+        subtitulo: t.subtitulo || 'Spotify',
+        imagen: t.imagen || DEFAULT_IMG,
+        tipo: t.tipo || 'Enlace',
+        dias: Array.isArray(t.dias) && t.dias.length > 0 ? t.dias : DIAS_TODOS,
+        activa: t.activa !== undefined ? t.activa : true,
+        fadeIn: Boolean(t.fadeIn)
+    }));
+}
+
+function emitirTareas() {
+    io.emit('tareas_actualizadas', serializarTareas());
+}
+
+function guardarTareasEnArchivo() {
+    fs.writeFileSync(tareasPath, JSON.stringify(serializarTareas(), null, 4));
+}
+
+if (fs.existsSync(tareasPath)) {
+    try {
+        const tareasGuardadas = JSON.parse(fs.readFileSync(tareasPath, 'utf8'));
+        let historialModificado = false;
+
+        tareasGuardadas.forEach(t => {
+            const dias = Array.isArray(t.dias) && t.dias.length > 0 ? t.dias : DIAS_TODOS;
+            const activa = t.activa !== undefined ? t.activa : true;
+            const fadeIn = Boolean(t.fadeIn);
+            const cronObj = crearTareaCron(t.hora, t.minuto, t.ruta, dias, activa, fadeIn);
+            
+            const tareaNormalizada = {
+                id: t.id,
+                hora: t.hora,
+                minuto: t.minuto,
+                ruta: t.ruta,
+                nombre: t.nombre || t.ruta,
+                subtitulo: t.subtitulo || 'Enlace guardado',
+                imagen: t.imagen || DEFAULT_IMG,
+                tipo: t.tipo || 'Enlace',
+                dias,
+                activa,
+                fadeIn,
+                cronObj
+            };
+            tareasProgramadas.push(tareaNormalizada);
+            
+            if (!historial.some(h => h.ruta === t.ruta)) {
+                historial.push({
+                    ruta: t.ruta,
+                    nombre: tareaNormalizada.nombre,
+                    subtitulo: tareaNormalizada.subtitulo,
+                    imagen: tareaNormalizada.imagen,
+                    tipo: tareaNormalizada.tipo
+                });
+                historialModificado = true;
+            }
+        });
+
+        if (historialModificado) {
+            fs.writeFileSync(historialPath, JSON.stringify(historial, null, 4));
+        }
+    } catch (e) {}
+}
+
 // ----- RUTAS DE AUTENTICACIÓN -----
 app.get('/login', (req, res) => {
   const scopes = [
-      'user-modify-playback-state', 
-      'user-read-playback-state', 
-      'playlist-read-private', 
-      'playlist-read-collaborative'
+    'streaming',
+    'user-read-email',
+    'user-read-private',
+    'user-modify-playback-state',
+    'user-read-playback-state',
+    'playlist-read-private',
+    'playlist-read-collaborative'
   ];
-  const authorizeURL = spotifyApi.createAuthorizeURL(scopes, 'estado-inicial');
-  res.redirect(authorizeURL);
+  res.redirect(spotifyApi.createAuthorizeURL(scopes, 'estado-inicial'));
 });
 
 app.get('/callback', (req, res) => {
-  const code = req.query.code || null;
-  spotifyApi.authorizationCodeGrant(code).then(
-    (data) => {
-      spotifyApi.setAccessToken(data.body['access_token']);
-      spotifyApi.setRefreshToken(data.body['refresh_token']);
-      console.log('✅ ¡Spotify autenticado correctamente!');
+  spotifyApi.authorizationCodeGrant(req.query.code || null).then(
+    async (data) => {
+      const accessToken = data.body['access_token'];
+      const refreshToken = data.body['refresh_token'];
 
-      if(tokenRefreshInterval) clearInterval(tokenRefreshInterval);
-      tokenRefreshInterval = setInterval(() => {
-        spotifyApi.refreshAccessToken().then(
-          (data) => spotifyApi.setAccessToken(data.body['access_token']),
-          (err) => console.error('Error al refrescar token', err)
-        );
-      }, 50 * 60 * 1000);
+      spotifyApi.setAccessToken(accessToken);
+      spotifyApi.setRefreshToken(refreshToken);
 
-      if(monitorReproduccion) clearInterval(monitorReproduccion);
-      monitorReproduccion = setInterval(async () => {
-          if (!spotifyApi.getAccessToken()) return;
-          try {
-              const estado = await spotifyApi.getMyCurrentPlaybackState();
-              if (estado.body && estado.body.item) {
-                  io.emit('estado_reproduccion', {
-                      activo: estado.body.is_playing,
-                      cancion: estado.body.item.name,
-                      artista: estado.body.item.artists.map(a => a.name).join(', '),
-                      imagen: estado.body.item.album.images[0]?.url,
-                      progreso: estado.body.progress_ms,   // <-- NUEVO: Tiempo actual
-                      duracion: estado.body.item.duration_ms // <-- NUEVO: Duración total
-                  });
-              } else {
-                  io.emit('estado_reproduccion', { activo: false });
-              }
-          } catch (error) {}
-      }, 3000);
+      if (refreshToken) {
+          appConfig.refreshToken = refreshToken;
+          fs.writeFileSync(configPath, JSON.stringify(appConfig, null, 4));
+      }
 
-      res.send('<h2 style="color:#1DB954; text-align:center; margin-top:50px; font-family:sans-serif;">¡Autenticación Exitosa!<br>Vuelve a tu dashboard.</h2>');
-    },
-    (err) => res.send('Error en la autenticación.')
+      iniciarServiciosSpotify();
+      await actualizarMetadatosPendientes();
+      await emitirDispositivos();
+
+      res.send('<h2 style="color:#1DB954; text-align:center; margin-top:50px; font-family:sans-serif;">¡Autenticación Exitosa!<br>Ya puedes cerrar esta pestaña y volver a tu dashboard.</h2>');
+    }, (err) => res.send('Error en la autenticación.')
   );
 });
 
-// ----- LÓGICA PRINCIPAL -----
+// ----- LÓGICA DE SOCKETS -----
 io.on('connection', (socket) => {
-    socket.emit('tareas_actualizadas', tareasProgramadas.map(t => ({ id: t.id, hora: t.hora, minuto: t.minuto, ruta: t.ruta })));
+    socket.emit('tareas_actualizadas', serializarTareas());
+    socket.emit('configuracion_actual', {
+        clientId: appConfig.clientId,
+        clientSecret: appConfig.clientSecret,
+        preferredDeviceId: appConfig.preferredDeviceId || ''
+    });
+    socket.emit('historial_actualizado', historial);
+    socket.emit('estado_sesion', { 
+        autenticado: sesionActiva, 
+        accessToken: spotifyApi.getAccessToken() || '' 
+    });
+    socket.emit('info_red', { ipLocal: obtenerIpLocal() });
+    emitirDispositivos();
 
-    // CONTROLES EN VIVO
-    socket.on('control_play', async () => { 
-        if (!spotifyApi.getAccessToken()) return console.log("⚠️ ALERTA: No tienes permisos. Entra a http://127.0.0.1:3001/login");
-        try { 
-            const dispositivos = await spotifyApi.getMyDevices();
-            if (!dispositivos.body.devices || dispositivos.body.devices.length === 0) return console.log("⚠️ No hay dispositivos abiertos.");
-            
-            // PRIORIDAD: Web Player -> Activo -> Computadora -> Primero en la lista
-            const deviceToPlay = dispositivos.body.devices.find(d => d.name.toLowerCase().includes('web player'))
-                              || dispositivos.body.devices.find(d => d.is_active) 
-                              || dispositivos.body.devices.find(d => d.type === 'Computer') 
-                              || dispositivos.body.devices[0];
-            
-            if (!deviceToPlay.is_active) {
-                await spotifyApi.transferMyPlayback([deviceToPlay.id]); 
+    // Reconexión rápida desde móvil o PC usando el refreshToken guardado
+    socket.on('forzar_reconexion', async (cb) => {
+        const ok = await intentarAutoLogin();
+        if (typeof cb === 'function') cb(ok);
+    });
+
+    // Reproducir directamente una canción o playlist del Historial (ideal para móvil)
+    socket.on('reproducir_item_directo', async (rutaOriginal) => {
+        if (!spotifyApi.getAccessToken()) return;
+        try {
+            const uriSpotify = parseSpotifyUri(rutaOriginal);
+            const device = await getActiveDevice();
+            if (!device) return;
+            if (!device.is_active) {
+                await spotifyApi.transferMyPlayback([device.id]);
                 await esperar(1500);
             }
-            await spotifyApi.play({ device_id: deviceToPlay.id }); 
-        } 
-        catch(e){ console.error('\n❌ Error en Play:', e); } 
+            const esTrack = uriSpotify.includes('track');
+            const opcionesPlay = { device_id: device.id };
+            if (esTrack) opcionesPlay.uris = [uriSpotify];
+            else opcionesPlay.context_uri = uriSpotify;
+
+            await spotifyApi.play(opcionesPlay);
+        } catch (e) {}
+    });
+
+    socket.on('solicitar_token_sdk', async (callback) => {
+        if (!spotifyApi.getAccessToken() && appConfig.refreshToken) {
+            await intentarAutoLogin();
+        }
+        if (typeof callback === 'function') {
+            callback(spotifyApi.getAccessToken() || '');
+        }
+    });
+
+    socket.on('web_player_listo', async (deviceId) => {
+        await esperar(800);
+        await emitirDispositivos();
+    });
+
+    socket.on('guardar_configuracion', (nuevosDatos) => {
+        const cambioCredenciales = appConfig.clientId !== nuevosDatos.clientId || appConfig.clientSecret !== nuevosDatos.clientSecret;
+        appConfig.clientId = nuevosDatos.clientId;
+        appConfig.clientSecret = nuevosDatos.clientSecret;
+        if (cambioCredenciales) {
+            appConfig.refreshToken = '';
+            sesionActiva = false;
+            io.emit('estado_sesion', { autenticado: false, accessToken: '' });
+        }
+        fs.writeFileSync(configPath, JSON.stringify(appConfig, null, 4));
+        spotifyApi.setClientId(appConfig.clientId);
+        spotifyApi.setClientSecret(appConfig.clientSecret);
+        socket.emit('configuracion_guardada');
+    });
+
+    socket.on('obtener_dispositivos', async () => {
+        await emitirDispositivos();
+    });
+
+    socket.on('seleccionar_dispositivo', async (deviceId) => {
+        appConfig.preferredDeviceId = deviceId || '';
+        fs.writeFileSync(configPath, JSON.stringify(appConfig, null, 4));
+
+        if (deviceId && spotifyApi.getAccessToken()) {
+            try {
+                await spotifyApi.transferMyPlayback([deviceId]);
+            } catch (e) {}
+        }
+        await emitirDispositivos();
+    });
+
+    socket.on('control_play', async () => { 
+        if (!spotifyApi.getAccessToken()) return;
+        try { 
+            const device = await getActiveDevice();
+            if (!device) return;
+            if (!device.is_active) { await spotifyApi.transferMyPlayback([device.id]); await esperar(1500); }
+            await spotifyApi.play({ device_id: device.id }); 
+        } catch(e){} 
     });
 
     socket.on('control_pausa', async () => { 
         if (!spotifyApi.getAccessToken()) return;
-        try { await spotifyApi.pause(); } catch(e){} 
+        if (fadeInterval) { clearInterval(fadeInterval); fadeInterval = null; }
+        try { const device = await getActiveDevice(); if(device) await spotifyApi.pause({ device_id: device.id }); } catch(e){} 
     });
     socket.on('control_siguiente', async () => { 
         if (!spotifyApi.getAccessToken()) return;
-        try { await spotifyApi.skipToNext(); } catch(e){} 
+        try { const device = await getActiveDevice(); if(device) await spotifyApi.skipToNext({ device_id: device.id }); } catch(e){} 
     });
     socket.on('control_anterior', async () => { 
         if (!spotifyApi.getAccessToken()) return;
-        try { await spotifyApi.skipToPrevious(); } catch(e){} 
+        try { const device = await getActiveDevice(); if(device) await spotifyApi.skipToPrevious({ device_id: device.id }); } catch(e){} 
     });
 
-    // LEER PLAYLIST, ÁLBUM O CANCIÓN
+    socket.on('control_seek', async (posicionMs) => {
+        if (!spotifyApi.getAccessToken()) return;
+        try {
+            const device = await getActiveDevice();
+            if (device) await spotifyApi.seek(Math.floor(posicionMs), { device_id: device.id });
+        } catch(e) {}
+    });
+
+    socket.on('control_volumen', async (nuevoVolumen) => {
+        if (!spotifyApi.getAccessToken()) return;
+        if (fadeInterval) { clearInterval(fadeInterval); fadeInterval = null; }
+        try {
+            const device = await getActiveDevice();
+            if (device) {
+                const volSeguro = Math.max(0, Math.min(100, Math.round(nuevoVolumen)));
+                await spotifyApi.setVolume(volSeguro, { device_id: device.id });
+            }
+        } catch(e) {}
+    });
+
+    socket.on('reproducir_ahora', async (data) => {
+        if (!spotifyApi.getAccessToken()) return;
+        try {
+            const { uris, offset } = data;
+            const device = await getActiveDevice();
+            if (!device) return;
+            if (!device.is_active) { await spotifyApi.transferMyPlayback([device.id]); await esperar(1500); }
+            await spotifyApi.play({ device_id: device.id, uris, offset: { position: offset } });
+        } catch(e) {}
+    });
+
     socket.on('obtener_playlist', async (rutaOriginal) => {
-        if (!spotifyApi.getAccessToken()) return socket.emit('lista_canciones_resultado', ['⚠️ Inicia sesión en /login primero.']);
+        if (!spotifyApi.getAccessToken()) return socket.emit('lista_canciones_resultado', ['⚠️ Inicia sesión primero.']);
         try {
             const uri = parseSpotifyUri(rutaOriginal);
-            
             if (uri.includes('playlist')) {
                 const playlistId = uri.split(':')[2];
                 const data = await spotifyApi.getPlaylistTracks(playlistId);
-                const tracks = data.body.items.map((item, index) => `${index + 1}. ${item.track.name} - ${item.track.artists[0].name}`);
+                const tracks = data.body.items.map((item, index) => ({ numero: index + 1, nombre: item.track.name, artista: item.track.artists[0].name, uri: item.track.uri }));
                 socket.emit('lista_canciones_resultado', tracks);
-                
             } else if (uri.includes('track')) {
                 const trackId = uri.split(':')[2];
                 const data = await spotifyApi.getTrack(trackId);
-                const trackInfo = `${data.body.name} - ${data.body.artists[0].name}`;
-                socket.emit('lista_canciones_resultado', [trackInfo]);
-                
+                socket.emit('lista_canciones_resultado', [{ numero: 1, nombre: data.body.name, artista: data.body.artists[0].name, uri: data.body.uri }]);
             } else if (uri.includes('album')) {
                 const albumId = uri.split(':')[2];
                 const data = await spotifyApi.getAlbumTracks(albumId);
-                const tracks = data.body.items.map((item, index) => `${index + 1}. ${item.name} - ${item.artists[0].name}`);
+                const tracks = data.body.items.map((item, index) => ({ numero: index + 1, nombre: item.name, artista: item.artists[0].name, uri: item.uri }));
                 socket.emit('lista_canciones_resultado', tracks);
-                
-            } else {
-                socket.emit('lista_canciones_resultado', ['Formato de enlace no reconocido.']);
-            }
-        } catch (error) {
-            socket.emit('lista_canciones_resultado', ['Error al cargar la información. Verifica el enlace.']);
+            } else { socket.emit('lista_canciones_resultado', ['Formato no reconocido.']); }
+        } catch (error) { socket.emit('lista_canciones_resultado', ['Error al cargar la info.']); }
+    });
+
+    socket.on('programar_musica', async (data) => {
+        const { hora, minuto, ruta, dias, fadeIn } = data;
+        const diasSeleccionados = Array.isArray(dias) && dias.length > 0 ? dias : DIAS_TODOS;
+        const usarFadeIn = Boolean(fadeIn);
+        const meta = await obtenerMetadatosRuta(ruta);
+        const cronObj = crearTareaCron(hora, minuto, ruta, diasSeleccionados, true, usarFadeIn);
+        
+        const nuevaTarea = { 
+            id: Date.now(), 
+            hora, 
+            minuto, 
+            ruta, 
+            nombre: meta.nombre,
+            subtitulo: meta.subtitulo,
+            imagen: meta.imagen,
+            tipo: meta.tipo,
+            dias: diasSeleccionados,
+            activa: true,
+            fadeIn: usarFadeIn,
+            cronObj 
+        };
+        
+        tareasProgramadas.push(nuevaTarea);
+        guardarTareasEnArchivo();
+
+        const indexHist = historial.findIndex(h => h.ruta === ruta);
+        if (indexHist === -1) {
+            historial.unshift(meta);
+        } else {
+            historial[indexHist] = meta;
+        }
+        fs.writeFileSync(historialPath, JSON.stringify(historial, null, 4));
+        
+        io.emit('historial_actualizado', historial);
+        emitirTareas();
+    });
+
+    socket.on('toggle_tarea', (id) => {
+        const index = tareasProgramadas.findIndex(t => String(t.id) === String(id));
+        if (index !== -1) {
+            const tarea = tareasProgramadas[index];
+            tarea.activa = !tarea.activa;
+            if (tarea.activa) tarea.cronObj.start();
+            else tarea.cronObj.stop();
+            guardarTareasEnArchivo();
+            emitirTareas();
         }
     });
 
-    // ALARMA PROGRAMADA CON PRIORIDAD AL REPRODUCTOR WEB
-    socket.on('programar_musica', (data) => {
-        const { hora, minuto, ruta } = data;
-        const uriSpotify = parseSpotifyUri(ruta);
-        
-        const tareaCron = cron.schedule(`${minuto} ${hora} * * *`, async () => {
-            console.log(`\n--- INICIANDO ALARMA DE LAS ${hora}:${minuto} ---`);
+    socket.on('editar_tarea', (data) => {
+        const { id, nuevaHora, nuevoMinuto, nuevosDias, nuevoFadeIn } = data;
+        const index = tareasProgramadas.findIndex(t => String(t.id) === String(id));
+        if (index !== -1) {
+            const tarea = tareasProgramadas[index];
+            tarea.cronObj.stop();
+            if (nuevaHora !== undefined) tarea.hora = nuevaHora;
+            if (nuevoMinuto !== undefined) tarea.minuto = nuevoMinuto;
+            if (Array.isArray(nuevosDias) && nuevosDias.length > 0) {
+                tarea.dias = nuevosDias;
+            }
+            if (nuevoFadeIn !== undefined) {
+                tarea.fadeIn = Boolean(nuevoFadeIn);
+            }
+            tarea.cronObj = crearTareaCron(tarea.hora, tarea.minuto, tarea.ruta, tarea.dias, tarea.activa, tarea.fadeIn);
             
-            if (!spotifyApi.getAccessToken()) {
-                console.error("❌ FALLO CRÍTICO: El servidor no tiene sesión. Entra a http://127.0.0.1:3001/login");
-                return;
+            guardarTareasEnArchivo();
+            emitirTareas();
+        }
+    });
+
+    socket.on('importar_backup', async (backupData) => {
+        try {
+            if (Array.isArray(backupData.tareas)) {
+                tareasProgramadas.forEach(t => t.cronObj.stop());
+                tareasProgramadas = [];
+
+                backupData.tareas.forEach(t => {
+                    if (!t.hora || !t.minuto || !t.ruta) return;
+                    const dias = Array.isArray(t.dias) && t.dias.length > 0 ? t.dias : DIAS_TODOS;
+                    const activa = t.activa !== undefined ? t.activa : true;
+                    const fadeIn = Boolean(t.fadeIn);
+                    const cronObj = crearTareaCron(t.hora, t.minuto, t.ruta, dias, activa, fadeIn);
+
+                    tareasProgramadas.push({
+                        id: t.id || Date.now() + Math.floor(Math.random() * 10000),
+                        hora: t.hora,
+                        minuto: t.minuto,
+                        ruta: t.ruta,
+                        nombre: t.nombre || t.ruta,
+                        subtitulo: t.subtitulo || 'Spotify',
+                        imagen: t.imagen || DEFAULT_IMG,
+                        tipo: t.tipo || 'Enlace',
+                        dias,
+                        activa,
+                        fadeIn,
+                        cronObj
+                    });
+                });
+                guardarTareasEnArchivo();
+                emitirTareas();
             }
 
-            let deviceId = null;
-            let isDeviceActive = false; 
-
-            try {
-                console.log("1. Buscando dispositivos en tu cuenta...");
-                const dispositivos = await spotifyApi.getMyDevices();
-                
-                if (!dispositivos.body.devices || dispositivos.body.devices.length === 0) {
-                    console.error('❌ Fallo: Ningún dispositivo encontrado. Abre la app o la web de Spotify.');
-                    return;
-                }
-
-                // NUEVO ORDEN DE PRIORIDAD: Siempre busca el reproductor web primero
-                const deviceToPlay = dispositivos.body.devices.find(d => d.name.toLowerCase().includes('web player'))
-                                  || dispositivos.body.devices.find(d => d.is_active) 
-                                  || dispositivos.body.devices.find(d => d.type === 'Computer') 
-                                  || dispositivos.body.devices[0];
-                                  
-                deviceId = deviceToPlay.id;
-                isDeviceActive = deviceToPlay.is_active; 
-                
-                console.log(`✅ Dispositivo encontrado: ${deviceToPlay.name} (Activo: ${isDeviceActive})`);
-                
-                if (isDeviceActive) {
-                    console.log("2. Dispositivo activo. Pausando el reproductor para limpiar el caché...");
-                    try { await spotifyApi.pause({ device_id: deviceId }); } catch(e){}
-                    await esperar(1000); 
-                } else {
-                    console.log("2. Dispositivo inactivo. Despertándolo forzosamente...");
-                    await spotifyApi.transferMyPlayback([deviceId]);
-                    await esperar(2500); 
-                }
-
-            } catch (err) {
-                console.error("❌ Error en el PASO 1 o 2 (Dispositivos):", err.body ? err.body.error : err);
-                return; 
+            if (Array.isArray(backupData.historial)) {
+                historial = backupData.historial.map(item => typeof item === 'string'
+                    ? { ruta: item, nombre: item, subtitulo: 'Enlace guardado', imagen: DEFAULT_IMG, tipo: 'Enlace' }
+                    : item
+                );
+                fs.writeFileSync(historialPath, JSON.stringify(historial, null, 4));
+                io.emit('historial_actualizado', historial);
             }
 
-            try {
-                console.log(`3. Preparando orden de Play -> URI: ${uriSpotify}`);
-                const esTrack = uriSpotify.includes('track');
-                
-                let opcionesPlay = { device_id: deviceId }; 
-                
-                if (esTrack) {
-                    opcionesPlay.uris = [uriSpotify];
-                } else {
-                    opcionesPlay.context_uri = uriSpotify;
-                }
-                
-                console.log("➡️ Opciones exactas enviadas a Spotify:", opcionesPlay);
-                await spotifyApi.play(opcionesPlay);
-                console.log(`✅ 🎵 ¡Música sonando correctamente en la versión Web!`);
+            await actualizarMetadatosPendientes();
+            socket.emit('backup_importado_ok');
+        } catch (e) {}
+    });
 
-            } catch (err) {
-                console.error(`❌ Error en el PASO 3 (Reproducción):`, err.message || err.statusCode || "Error desconocido");
-                if (err.body && err.body.error) {
-                    console.error("Detalle de Spotify:", err.body.error);
-                }
-            }
-        });
-
-        tareasProgramadas.push({ id: Date.now(), hora, minuto, ruta, cronObj: tareaCron });
-        io.emit('tareas_actualizadas', tareasProgramadas.map(t => ({ id: t.id, hora: t.hora, minuto: t.minuto, ruta: t.ruta })));
-        console.log(`⏰ Nueva alarma configurada a las ${hora}:${minuto}`);
+    socket.on('eliminar_historial', (rutaEliminar) => {
+        historial = historial.filter(h => h.ruta !== rutaEliminar);
+        fs.writeFileSync(historialPath, JSON.stringify(historial, null, 4));
+        io.emit('historial_actualizado', historial);
     });
 
     socket.on('cancelar_tarea', (id) => {
-        const index = tareasProgramadas.findIndex(t => t.id === id);
+        const index = tareasProgramadas.findIndex(t => String(t.id) === String(id));
         if (index !== -1) {
             tareasProgramadas[index].cronObj.stop();
             tareasProgramadas.splice(index, 1);
-            io.emit('tareas_actualizadas', tareasProgramadas.map(t => ({ id: t.id, hora: t.hora, minuto: t.minuto, ruta: t.ruta })));
+            guardarTareasEnArchivo();
+            emitirTareas();
         }
     });
 });
 
-server.listen(3001, () => {
+server.listen(3001, '0.0.0.0', () => {
+    const ip = obtenerIpLocal();
     console.log('==================================================');
-    console.log(' Backend corriendo en http://localhost:3001       ');
+    console.log(` Backend Local:   http://localhost:3001`);
+    console.log(` Control Móvil:   http://${ip}:5173`);
     console.log('==================================================');
+    intentarAutoLogin();
 });
