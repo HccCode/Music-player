@@ -9,9 +9,13 @@ import MobileView from './components/MobileView';
 import SidebarLeft from './components/SidebarLeft';
 import RightPanel from './components/RightPanel';
 import BottomPlayer from './components/BottomPlayer';
+
 import InicioView from './components/views/InicioView';
 import HistorialView from './components/views/HistorialView';
 import ConfiguracionView from './components/views/ConfiguracionView';
+import LocutorView from './components/views/LocutorView';
+import LucesView from './components/views/LucesView';
+import CajaNegraView from './components/views/CajaNegraView';
 
 const BACKEND_URL = `http://${window.location.hostname}:3001`;
 const socket = io(BACKEND_URL);
@@ -24,19 +28,20 @@ function App() {
   const [modoKiosco, setModoKiosco] = useState(false);
   const [mostrarControlesKiosco, setMostrarControlesKiosco] = useState(true);
 
+  // Estados Principales de Datos
   const [tareas, setTareas] = useState([]);
   const [anuncios, setAnuncios] = useState([]);
   const [historial, setHistorial] = useState([]);
+  const [cajaNegra, setCajaNegra] = useState([]); 
   const [sesionAutenticada, setSesionAutenticada] = useState(false);
   const [spotifyToken, setSpotifyToken] = useState('');
   
+  // Reproductores y Audio
   const [sdkListo, setSdkListo] = useState(false);
   const [webPlayerId, setWebPlayerId] = useState('');
   const [audioDesbloqueado, setAudioDesbloqueado] = useState(false);
   const [errorSdk, setErrorSdk] = useState('');
   const playerRef = useRef(null);
-
-  // Referencias para el reproductor de YouTube integrado
   const ytPlayerRef = useRef(null);
   const ytFadeIntervalRef = useRef(null);
 
@@ -50,7 +55,7 @@ function App() {
   const [dispositivos, setDispositivos] = useState([]);
   const [dispositivoPreferido, setDispositivoPreferido] = useState('');
 
-  // Configuración y Locutor
+  // Configuración de Locutor y Luces
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [vozActivada, setVozActivada] = useState(false);
@@ -59,6 +64,11 @@ function App() {
   const [vozNombre, setVozNombre] = useState('');
   const [vocesDisponibles, setVocesDisponibles] = useState([]);
   const [mensajeGuardadoVoz, setMensajeGuardadoVoz] = useState(false);
+  
+  const [lucesActivadas, setLucesActivadas] = useState(false);
+  const [lucesWebhook, setLucesWebhook] = useState('');
+  const [tuyaId, setTuyaId] = useState(''); 
+  const [tuyaKey, setTuyaKey] = useState('');
 
   const [reproduccion, setReproduccion] = useState({ 
     activo: false, cancion: 'Esperando música...', artista: 'Spotify / YouTube', 
@@ -70,6 +80,7 @@ function App() {
   const [progresoLocal, setProgresoLocal] = useState(0);
   const [volumen, setVolumen] = useState(80);
   const [volumenPrevio, setVolumenPrevio] = useState(80);
+  
   const cambiandoVolumenRef = useRef(false);
   const vozVolumenRef = useRef(50);
   const vozNombreRef = useRef('');
@@ -77,7 +88,7 @@ function App() {
   useEffect(() => { vozVolumenRef.current = vozVolumen; }, [vozVolumen]);
   useEffect(() => { vozNombreRef.current = vozNombre; }, [vozNombre]);
 
-  // Cargar voces disponibles en el navegador
+  // Cargar voces del navegador
   useEffect(() => {
     if (!('speechSynthesis' in window)) return;
     const cargarListaVoces = () => {
@@ -95,17 +106,20 @@ function App() {
     window.speechSynthesis.onvoiceschanged = cargarListaVoces;
   }, []);
 
+  // Eventos de Ventana y Redimensión
   useEffect(() => {
     const handleResize = () => setEsMovil(window.innerWidth <= 850);
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  // Reloj
   useEffect(() => {
     const timerReloj = setInterval(() => setAhora(new Date()), 1000);
     return () => clearInterval(timerReloj);
   }, []);
 
+  // Control Kiosco
   useEffect(() => {
     const handleKeyDown = (e) => { if (e.key === 'Escape') cerrarKiosco(); };
     const handleFullScreenChange = () => { if (!document.fullscreenElement) setModoKiosco(false); };
@@ -133,7 +147,7 @@ function App() {
     };
   }, [modoKiosco]);
 
-  // Inicializar YouTube IFrame API en PC
+  // Inicializar YouTube IFrame API
   useEffect(() => {
     if (esMovil) return;
 
@@ -142,24 +156,14 @@ function App() {
       ytPlayerRef.current = new window.YT.Player('youtube-hidden-player', {
         height: '1',
         width: '1',
-        playerVars: {
-          autoplay: 1,
-          controls: 0,
-          disablekb: 1,
-          fs: 0,
-          rel: 0,
-          origin: window.location.origin
-        },
+        playerVars: { autoplay: 1, controls: 0, disablekb: 1, fs: 0, rel: 0, origin: window.location.origin },
         events: {
           onStateChange: (event) => {
-            // 1 = PLAYING, 2 = PAUSED, 0 = ENDED
             const reproduciendo = event.data === 1;
             const duracionMs = Math.floor((event.target.getDuration() || 0) * 1000);
             const progresoMs = Math.floor((event.target.getCurrentTime() || 0) * 1000);
             socket.emit('youtube_progreso_sync', {
-              activo: reproduciendo,
-              progreso: progresoMs,
-              duracion: duracionMs
+              activo: reproduciendo, progreso: progresoMs, duracion: duracionMs
             });
           }
         }
@@ -179,7 +183,7 @@ function App() {
     }
   }, [esMovil]);
 
-  // Sincronizar cada 2s el progreso del reproductor de YouTube con el servidor
+  // Sincronización de progreso YouTube
   useEffect(() => {
     if (esMovil || !reproduccion.esYoutube || !reproduccion.activo) return;
     const syncTimer = setInterval(() => {
@@ -187,11 +191,7 @@ function App() {
       if (yt && typeof yt.getCurrentTime === 'function') {
         const progresoMs = Math.floor((yt.getCurrentTime() || 0) * 1000);
         const duracionMs = Math.floor((yt.getDuration() || 0) * 1000);
-        socket.emit('youtube_progreso_sync', {
-          activo: true,
-          progreso: progresoMs,
-          duracion: duracionMs
-        });
+        socket.emit('youtube_progreso_sync', { activo: true, progreso: progresoMs, duracion: duracionMs });
       }
     }, 2000);
     return () => clearInterval(syncTimer);
@@ -220,19 +220,17 @@ function App() {
 
   const hablarConClima = (textoPersonalizado, opciones = {}) => {
     ejecutarLocutorConClima({
-      textoPersonalizado,
-      opciones,
-      socket,
-      playerRef,
-      vozVolumenDefault: vozVolumenRef.current,
-      vozNombreDefault: vozNombreRef.current
+      textoPersonalizado, opciones, socket, playerRef,
+      vozVolumenDefault: vozVolumenRef.current, vozNombreDefault: vozNombreRef.current
     });
   };
 
+  // Listeners de Sockets
   useEffect(() => {
     socket.on('tareas_actualizadas', (data) => setTareas(data));
     socket.on('anuncios_actualizados', (data) => setAnuncios(data));
     socket.on('historial_actualizado', (data) => setHistorial(data));
+    socket.on('caja_negra_actualizada', (data) => setCajaNegra(data));
     socket.on('info_red', (data) => { if (data?.ipLocal) setIpLocal(data.ipLocal); });
     socket.on('estado_sesion', (data) => {
       setSesionAutenticada(Boolean(data?.autenticado));
@@ -244,6 +242,7 @@ function App() {
       if (data.volumen !== undefined && !cambiandoVolumenRef.current) setVolumen(data.volumen);
     });
     socket.on('lista_canciones_resultado', (data) => setCola(data));
+    
     socket.on('configuracion_actual', (data) => {
       setClientId(data.clientId || ''); 
       setClientSecret(data.clientSecret || '');
@@ -251,12 +250,18 @@ function App() {
       setVozTexto(data.vozTexto || '');
       if (data.vozVolumen !== undefined) setVozVolumen(Number(data.vozVolumen));
       if (data.vozNombre !== undefined) setVozNombre(data.vozNombre || '');
+      if (data.lucesActivadas !== undefined) setLucesActivadas(Boolean(data.lucesActivadas));
+      if (data.lucesWebhook !== undefined) setLucesWebhook(data.lucesWebhook || '');
+      if (data.tuyaId !== undefined) setTuyaId(data.tuyaId || '');
+      if (data.tuyaKey !== undefined) setTuyaKey(data.tuyaKey || '');
       if (data.preferredDeviceId !== undefined) setDispositivoPreferido(data.preferredDeviceId);
     });
+
     socket.on('dispositivos_actualizados', (data) => {
       setDispositivos(data.dispositivos || []);
       if (data.preferredDeviceId !== undefined) setDispositivoPreferido(data.preferredDeviceId);
     });
+
     socket.on('locutor_guardado_ok', (data) => {
       setVozActivada(Boolean(data.vozActivada));
       setVozTexto(data.vozTexto || '');
@@ -265,24 +270,24 @@ function App() {
       setMensajeGuardadoVoz(true);
       setTimeout(() => setMensajeGuardadoVoz(false), 2500);
     });
+
     socket.on('configuracion_guardada', () => {
       alert('¡Credenciales guardadas! Renueva la sesión de Spotify.');
       window.open('http://127.0.0.1:3001/login', '_blank');
       setVistaActiva('inicio');
     });
+
     socket.on('backup_importado_ok', () => {
       alert('✅ ¡Copia de seguridad restaurada exitosamente!');
     });
+
     socket.on('hablar_tts', (data) => {
       hablarConClima(data?.textoAdicional || '', {
-        volumenVoz: data?.volumenVoz,
-        vozNombre: data?.vozNombre,
-        esAlarmaMusical: data?.esAlarmaMusical,
-        fadeInAlTerminar: data?.fadeInAlTerminar
+        volumenVoz: data?.volumenVoz, vozNombre: data?.vozNombre,
+        esAlarmaMusical: data?.esAlarmaMusical, fadeInAlTerminar: data?.fadeInAlTerminar
       });
     });
 
-    // Comandos para controlar el reproductor de YouTube integrado
     socket.on('youtube_comando', (cmd) => {
       const yt = ytPlayerRef.current;
       if (!yt || typeof yt.loadVideoById !== 'function') return;
@@ -311,10 +316,7 @@ function App() {
         const fadeOut = setInterval(() => {
           v = Math.max(0, v - 20);
           if (yt.setVolume) yt.setVolume(v);
-          if (v <= 10) {
-            clearInterval(fadeOut);
-            yt.stopVideo();
-          }
+          if (v <= 10) { clearInterval(fadeOut); yt.stopVideo(); }
         }, 350);
       } else if (cmd.accion === 'volume') {
         if (ytFadeIntervalRef.current) clearInterval(ytFadeIntervalRef.current);
@@ -337,7 +339,7 @@ function App() {
       socket.off('locutor_guardado_ok'); socket.off('historial_actualizado');
       socket.off('dispositivos_actualizados'); socket.off('backup_importado_ok');
       socket.off('estado_sesion'); socket.off('info_red'); socket.off('hablar_tts');
-      socket.off('youtube_comando');
+      socket.off('youtube_comando'); socket.off('caja_negra_actualizada');
     };
   }, []);
 
@@ -349,9 +351,7 @@ function App() {
       if (!window.Spotify || playerRef.current) return;
       const player = new window.Spotify.Player({
         name: '🎧 Mi Panel Musical (Web)',
-        getOAuthToken: (cb) => {
-          socket.emit('solicitar_token_sdk', (tokenFresco) => cb(tokenFresco || spotifyToken));
-        },
+        getOAuthToken: (cb) => { socket.emit('solicitar_token_sdk', (tokenFresco) => cb(tokenFresco || spotifyToken)); },
         volume: 0.8
       });
 
@@ -372,14 +372,10 @@ function App() {
           setReproduccion(prev => {
             if (prev.esYoutube && state.paused) return prev;
             return {
-              ...prev,
-              activo: !state.paused,
-              cancion: currentTrack.name,
+              ...prev, activo: !state.paused, cancion: currentTrack.name,
               artista: currentTrack.artists.map(a => a.name).join(', '),
               imagen: currentTrack.album.images[0]?.url || prev.imagen,
-              progreso: state.position,
-              duracion: state.duration,
-              esYoutube: false
+              progreso: state.position, duracion: state.duration, esYoutube: false
             };
           });
           setProgresoLocal(state.position);
@@ -404,14 +400,11 @@ function App() {
     }
 
     return () => {
-      if (playerRef.current) {
-        playerRef.current.disconnect();
-        playerRef.current = null;
-      }
+      if (playerRef.current) { playerRef.current.disconnect(); playerRef.current = null; }
     };
   }, [spotifyToken, esMovil]);
 
-  // Color camaleón según la portada
+  // Color camaleón y Ambilight
   useEffect(() => {
     if (!reproduccion.imagen) return;
     const img = new Image();
@@ -437,6 +430,8 @@ function App() {
           g = Math.min(230, Math.max(25, Math.round((g / count) * boost)));
           b = Math.min(230, Math.max(25, Math.round((b / count) * boost)));
           setColorAmbiente(`${r}, ${g}, ${b}`);
+          
+          socket.emit('sincronizar_luces', { r, g, b });
         }
       } catch (e) {}
     };
@@ -484,16 +479,10 @@ function App() {
   };
 
   const handleGuardarLocutor = (
-    nuevaActivacion = vozActivada,
-    nuevoTexto = vozTexto,
-    nuevoVol = vozVolumen,
-    nuevoNombre = vozNombre
+    nuevaActivacion = vozActivada, nuevoTexto = vozTexto, nuevoVol = vozVolumen, nuevoNombre = vozNombre
   ) => {
     socket.emit('guardar_locutor', {
-      vozActivada: nuevaActivacion,
-      vozTexto: nuevoTexto,
-      vozVolumen: nuevoVol,
-      vozNombre: nuevoNombre
+      vozActivada: nuevaActivacion, vozTexto: nuevoTexto, vozVolumen: nuevoVol, vozNombre: nuevoNombre
     });
   };
 
@@ -592,7 +581,6 @@ function App() {
 
   return (
     <div className="modern-spotify-layout" style={{ '--ambient-rgb': colorAmbiente }}>
-      {/* Contenedor oculto para el reproductor de YouTube IFrame API */}
       <div 
         id="youtube-hidden-player" 
         style={{ position: 'fixed', bottom: '-10px', right: '-10px', width: '1px', height: '1px', opacity: 0.01, pointerEvents: 'none' }}
@@ -666,21 +654,9 @@ function App() {
               />
             )}
 
-            {vistaActiva === 'historial' && (
-              <HistorialView
-                historial={historial}
-                cargarListaManual={cargarListaManual}
-                reproducirItemDirecto={reproducirItemDirecto}
-                reusarRuta={reusarRuta}
-                eliminarDelHistorial={eliminarDelHistorial}
-              />
-            )}
-
-            {vistaActiva === 'configuracion' && (
-              <ConfiguracionView
+            {vistaActiva === 'locutor' && (
+              <LocutorView
                 anuncios={anuncios}
-                tareas={tareas}
-                historial={historial}
                 vozActivada={vozActivada}
                 setVozActivada={setVozActivada}
                 vozTexto={vozTexto}
@@ -693,6 +669,46 @@ function App() {
                 mensajeGuardadoVoz={mensajeGuardadoVoz}
                 handleGuardarLocutor={handleGuardarLocutor}
                 hablarConClima={hablarConClima}
+                socket={socket}
+              />
+            )}
+
+            {vistaActiva === 'luces' && (
+              <LucesView
+                lucesActivadas={lucesActivadas}
+                setLucesActivadas={setLucesActivadas}
+                lucesWebhook={lucesWebhook}
+                setLucesWebhook={setLucesWebhook}
+                tuyaId={tuyaId}
+                setTuyaId={setTuyaId}
+                tuyaKey={tuyaKey}
+                setTuyaKey={setTuyaKey}
+                socket={socket}
+              />
+            )}
+
+            {vistaActiva === 'historial' && (
+              <HistorialView
+                historial={historial}
+                cargarListaManual={cargarListaManual}
+                reproducirItemDirecto={reproducirItemDirecto}
+                reusarRuta={reusarRuta}
+                eliminarDelHistorial={eliminarDelHistorial}
+              />
+            )}
+
+            {vistaActiva === 'cajanegra' && (
+              <CajaNegraView
+                cajaNegra={cajaNegra}
+                socket={socket}
+              />
+            )}
+
+            {vistaActiva === 'configuracion' && (
+              <ConfiguracionView
+                tareas={tareas}
+                anuncios={anuncios}
+                historial={historial}
                 clientId={clientId}
                 setClientId={setClientId}
                 clientSecret={clientSecret}
