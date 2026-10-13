@@ -2059,3 +2059,41 @@ body {
     box-shadow: 0 0 12px var(--spotify-green-glow);
   }
 }
+
+.session-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.session-stack .status-indicator {
+  justify-content: center;
+  padding: 4px 12px;
+  font-size: 0.72rem;
+}
+
+.reconnect-mini-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-main);
+  border: 1px solid var(--glass-border-light);
+  border-radius: 500px;
+  padding: 4px 12px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-decoration: none;
+  transition: all 0.2s ease;
+  text-align: center;
+}
+
+.reconnect-mini-btn:hover {
+  background: var(--text-main);
+  color: var(--bg-deep);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(255, 255, 255, 0.2);
+}

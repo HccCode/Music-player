@@ -3,6 +3,7 @@ import { formatTime } from '../utils/helpers';
 
 export default function BottomPlayer({
   reproduccion,
+  sesionAutenticada,
   socket,
   activarAudioNavegador,
   progresoLocal,
@@ -79,10 +80,21 @@ export default function BottomPlayer({
           <span className="vol-percent">{volumen}%</span>
         </div>
 
-        <span className="status-indicator">
-          <span className="dot" style={{ backgroundColor: reproduccion.activo ? '#1DB954' : '#535353' }}></span>
-          {reproduccion.activo ? 'Sesión Activa' : 'Pausado'}
-        </span>
+        {/* COLUNA VERTICAL: SESIÓN ACTIVA EM CIMA E BOTÃO RECONECTAR EMBAIXO */}
+        <div className="session-stack">
+          <span className="status-indicator">
+            <span className="dot" style={{ backgroundColor: sesionAutenticada ? '#1ed760' : '#f59e0b' }}></span>
+            {sesionAutenticada ? 'Online' : 'Offline'}
+          </span>
+          <a 
+            href="http://127.0.0.1:3001/login" 
+            target="_blank" 
+            rel="noreferrer" 
+            className="reconnect-mini-btn"
+          >
+            {sesionAutenticada ? 'Reconectar' : 'Iniciar Sesión'}
+          </a>
+        </div>
       </div>
     </footer>
   );

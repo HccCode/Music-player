@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function SidebarLeft({ vistaActiva, setVistaActiva, sesionAutenticada }) {
+export default function SidebarLeft({ vistaActiva, setVistaActiva }) {
   return (
     <aside className="panel left-panel">
       <div className="nav-container">
@@ -14,15 +14,6 @@ export default function SidebarLeft({ vistaActiva, setVistaActiva, sesionAutenti
       <div className="library-container">
         <div className={`nav-item library-header ${vistaActiva === 'historial' ? 'active' : ''}`} onClick={() => setVistaActiva('historial')}>
           <span className="icon">🕒</span><span>Historial</span>
-        </div>
-        <div className="auth-box">
-          <div className="auth-status-row">
-            <span className="auth-dot" style={{ backgroundColor: sesionAutenticada ? '#1ed760' : '#f59e0b' }}></span>
-            <p>{sesionAutenticada ? 'Sesión Activa (Auto-Login)' : 'Sesión Pendiente'}</p>
-          </div>
-          <a href="http://127.0.0.1:3001/login" target="_blank" rel="noreferrer" className="pill-btn">
-            {sesionAutenticada ? 'Reconectar' : 'Iniciar Sesión'}
-          </a>
         </div>
       </div>
     </aside>

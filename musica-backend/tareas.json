@@ -1,26 +1,5 @@
 [
     {
-        "id": 1791592892424,
-        "hora": "17",
-        "minuto": "25",
-        "ruta": "https://open.spotify.com/intl-es/album/7vfuTRXIAYJz5Uc8SddnTr?si=c4d1aeb6ad604346",
-        "nombre": "Nightmare",
-        "subtitulo": "Avenged Sevenfold",
-        "imagen": "https://i.scdn.co/image/ab67616d0000b273c34064a3c5e4a25892a091f3",
-        "tipo": "Álbum",
-        "dias": [
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            0
-        ],
-        "activa": true,
-        "fadeIn": false
-    },
-    {
         "id": 1791769029473,
         "hora": "17",
         "minuto": "26",
@@ -52,5 +31,26 @@
         ],
         "activa": false,
         "fadeIn": false
+    },
+    {
+        "id": 1791863302899,
+        "hora": "20",
+        "minuto": "52",
+        "ruta": "https://open.spotify.com/playlist/37i9dQZF1DZ06evO2irEuk?si=a44b12a36f92418d",
+        "nombre": "https://open.spotify.com/playlist/37i9dQZF1DZ06evO2irEuk?si=a44b12a36f92418d",
+        "subtitulo": "Enlace de Spotify",
+        "imagen": "https://i.scdn.co/image/ab6761610000e5eb55d39ab9c21d506aa52f7021",
+        "tipo": "Enlace",
+        "dias": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            0
+        ],
+        "activa": true,
+        "fadeIn": true
     }
 ]

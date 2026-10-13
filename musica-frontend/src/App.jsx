@@ -555,8 +555,9 @@ function App() {
         />
       </div>
 
-      <BottomPlayer
+<BottomPlayer
         reproduccion={reproduccion}
+        sesionAutenticada={sesionAutenticada}
         socket={socket}
         activarAudioNavegador={activarAudioNavegador}
         progresoLocal={progresoLocal}

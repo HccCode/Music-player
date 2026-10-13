@@ -88,12 +88,12 @@ function parseSpotifyUri(input) {
 
 const esperar = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-function iniciarFadeInVolumen(deviceId, volInicial = 10, volFinal = 80, duracionSegundos = 30) {
+// --- FUNCIONES DE FADE-IN Y CROSSFADE SUAVE ---
+function iniciarFadeInVolumen(deviceId, volInicial = 10, volFinal = 80, duracionSegundos = 30, pasos = 6) {
     if (fadeInterval) clearInterval(fadeInterval);
     let volActual = volInicial;
-    const pasos = 6;
-    const incremento = Math.round((volFinal - volInicial) / pasos);
-    const intervaloMs = Math.round((duracionSegundos * 1000) / pasos);
+    const incremento = Math.max(1, Math.round((volFinal - volInicial) / pasos));
+    const intervaloMs = Math.max(250, Math.round((duracionSegundos * 1000) / pasos));
 
     fadeInterval = setInterval(async () => {
         volActual += incremento;
@@ -109,6 +109,37 @@ function iniciarFadeInVolumen(deviceId, volInicial = 10, volFinal = 80, duracion
             fadeInterval = null;
         }
     }, intervaloMs);
+}
+
+// Baja suavemente el volumen actual hasta 10% en ~2.8 segundos si ya hay música sonando
+async function ejecutarCrossfadeSalida(deviceId) {
+    if (fadeInterval) {
+        clearInterval(fadeInterval);
+        fadeInterval = null;
+    }
+    let volOriginal = 80;
+    let estabaSonando = false;
+
+    try {
+        const estado = await spotifyApi.getMyCurrentPlaybackState();
+        if (estado.body && estado.body.is_playing) {
+            estabaSonando = true;
+            volOriginal = estado.body.device?.volume_percent ?? 80;
+
+            if (volOriginal > 15) {
+                const pasos = 4;
+                const decremento = Math.round((volOriginal - 10) / pasos);
+                let v = volOriginal;
+                for (let i = 0; i < pasos; i++) {
+                    v = Math.max(10, v - decremento);
+                    await spotifyApi.setVolume(v, { device_id: deviceId });
+                    await esperar(650);
+                }
+            }
+        }
+    } catch (e) {}
+
+    return { estabaSonando, volOriginal };
 }
 
 async function obtenerMetadatosRuta(rutaOriginal) {
@@ -298,7 +329,7 @@ async function intentarAutoLogin() {
     }
 }
 
-// --- LÓGICA DE ALARMAS MUSICALES Y CRON ---
+// --- LÓGICA DE ALARMAS MUSICALES Y CRON (CON CROSSFADE SUAVE) ---
 function crearTareaCron(hora, minuto, ruta, dias = DIAS_TODOS, activa = true, fadeIn = false) {
     const uriSpotify = parseSpotifyUri(ruta);
     const diasValidos = Array.isArray(dias) && dias.length > 0 ? dias : DIAS_TODOS;
@@ -311,23 +342,27 @@ function crearTareaCron(hora, minuto, ruta, dias = DIAS_TODOS, activa = true, fa
         if (!spotifyApi.getAccessToken()) return;
 
         let deviceId = null;
+        let infoCrossfade = { estabaSonando: false, volOriginal: 80 };
+
         try {
             const device = await getActiveDevice();
             if (!device) return console.log('⚠️ No se encontró dispositivo para la alarma.');
             deviceId = device.id;
             
             if (device.is_active) {
+                // Si ya estaba sonando otra canción, hace Fade-Out suave de 3s hasta 10%
+                infoCrossfade = await ejecutarCrossfadeSalida(deviceId);
                 try { await spotifyApi.pause({ device_id: deviceId }); } catch(e){}
-                await esperar(1000); 
+                await esperar(600); 
             } else {
                 await spotifyApi.transferMyPlayback([deviceId]);
                 await esperar(2200); 
             }
 
-            if (fadeIn || appConfig.vozActivada) {
+            if (fadeIn || appConfig.vozActivada || infoCrossfade.estabaSonando) {
                 try {
                     await spotifyApi.setVolume(10, { device_id: deviceId });
-                    await esperar(400);
+                    await esperar(300);
                 } catch(e) {}
             }
         } catch (err) { return; }
@@ -349,7 +384,10 @@ function crearTareaCron(hora, minuto, ruta, dias = DIAS_TODOS, activa = true, fa
                     fadeInAlTerminar: Boolean(fadeIn)
                 });
             } else if (fadeIn) {
-                iniciarFadeInVolumen(deviceId, 10, 80, 30);
+                iniciarFadeInVolumen(deviceId, 10, 80, 30, 6);
+            } else if (infoCrossfade.estabaSonando) {
+                // Termina la transición Crossfade subiendo en 3 segundos al volumen previo
+                iniciarFadeInVolumen(deviceId, 10, infoCrossfade.volOriginal, 3, 4);
             }
         } catch (err) {}
     });
@@ -577,7 +615,7 @@ io.on('connection', (socket) => {
 
             if (opciones?.esAlarmaMusical) {
                 if (opciones?.fadeInAlTerminar) {
-                    iniciarFadeInVolumen(device.id, 10, 80, 25);
+                    iniciarFadeInVolumen(device.id, 10, 80, 25, 6);
                 } else {
                     await spotifyApi.setVolume(80, { device_id: device.id });
                 }
@@ -653,22 +691,32 @@ io.on('connection', (socket) => {
         if (typeof cb === 'function') cb(ok);
     });
 
+    // Reproducción desde vista móvil / historial con Crossfade Suave
     socket.on('reproducir_item_directo', async (rutaOriginal) => {
         if (!spotifyApi.getAccessToken()) return;
         try {
             const uriSpotify = parseSpotifyUri(rutaOriginal);
             const device = await getActiveDevice();
             if (!device) return;
+
+            let infoCrossfade = { estabaSonando: false, volOriginal: 80 };
             if (!device.is_active) {
                 await spotifyApi.transferMyPlayback([device.id]);
                 await esperar(1500);
+            } else {
+                infoCrossfade = await ejecutarCrossfadeSalida(device.id);
             }
+
             const esTrack = uriSpotify.includes('track');
             const opcionesPlay = { device_id: device.id };
             if (esTrack) opcionesPlay.uris = [uriSpotify];
             else opcionesPlay.context_uri = uriSpotify;
 
             await spotifyApi.play(opcionesPlay);
+
+            if (infoCrossfade.estabaSonando) {
+                iniciarFadeInVolumen(device.id, 10, infoCrossfade.volOriginal, 3, 4);
+            }
         } catch (e) {}
     });
 
@@ -787,14 +835,27 @@ io.on('connection', (socket) => {
         } catch(e) {}
     });
 
+    // Reproducción desde la cola derecha con Crossfade Suave
     socket.on('reproducir_ahora', async (data) => {
         if (!spotifyApi.getAccessToken()) return;
         try {
             const { uris, offset } = data;
             const device = await getActiveDevice();
             if (!device) return;
-            if (!device.is_active) { await spotifyApi.transferMyPlayback([device.id]); await esperar(1500); }
+
+            let infoCrossfade = { estabaSonando: false, volOriginal: 80 };
+            if (!device.is_active) {
+                await spotifyApi.transferMyPlayback([device.id]);
+                await esperar(1500);
+            } else {
+                infoCrossfade = await ejecutarCrossfadeSalida(device.id);
+            }
+
             await spotifyApi.play({ device_id: device.id, uris, offset: { position: offset } });
+
+            if (infoCrossfade.estabaSonando) {
+                iniciarFadeInVolumen(device.id, 10, infoCrossfade.volOriginal, 3, 4);
+            }
         } catch(e) {}
     });
 
