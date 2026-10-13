@@ -2097,3 +2097,10 @@ body {
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(255, 255, 255, 0.2);
 }
+
+/* INSIGNIA ROJA PARA ENLACES DE YOUTUBE */
+.media-badge.yt-badge {
+  background: rgba(255, 0, 51, 0.16);
+  color: #ff4d6d;
+  border-color: rgba(255, 0, 51, 0.38);
+}

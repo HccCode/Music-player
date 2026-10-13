@@ -1,5 +1,19 @@
 [
     {
+        "ruta": "https://open.spotify.com/intl-es/track/1ZBqJilDGBVYktvlCEo9jC?si=9d98c3162377410c",
+        "nombre": "Obstacle 1",
+        "subtitulo": "Interpol",
+        "imagen": "https://i.scdn.co/image/ab67616d0000b27314f8df9fb9c2d3056a994390",
+        "tipo": "Canción"
+    },
+    {
+        "ruta": "https://www.youtube.com/watch?v=f-H9bbi0Vyw",
+        "nombre": "Scott Pilgrim Vs. The World - Black Sheep [4K]",
+        "subtitulo": "YouTube • clarencito",
+        "imagen": "https://i.ytimg.com/vi/f-H9bbi0Vyw/hqdefault.jpg",
+        "tipo": "YouTube"
+    },
+    {
         "ruta": "https://open.spotify.com/playlist/37i9dQZF1DZ06evO2irEuk?si=a44b12a36f92418d",
         "nombre": "https://open.spotify.com/playlist/37i9dQZF1DZ06evO2irEuk?si=a44b12a36f92418d",
         "subtitulo": "Enlace de Spotify",

@@ -6,7 +6,8 @@ export default function InicioView({
   ruta,
   setRuta,
   socket,
-  cargarListaManual
+  cargarListaManual,
+  reproducirItemDirecto
 }) {
   const [hora, setHora] = useState('');
   const [diasSeleccionados, setDiasSeleccionados] = useState([1, 2, 3, 4, 5, 6, 0]);
@@ -57,7 +58,7 @@ export default function InicioView({
     <>
       <h1 className="main-title">Panel de Control Musical</h1>
       <div className="glass-card fixed-top-card">
-        <h2>Programar Reproducción</h2>
+        <h2>Programar Reproducción (Spotify o YouTube)</h2>
         <form className="schedule-form-container" onSubmit={handleProgramar}>
           <div className="schedule-form">
             <div className="input-group">
@@ -65,10 +66,10 @@ export default function InicioView({
               <input type="time" value={hora} onChange={(e) => setHora(e.target.value)} required />
             </div>
             <div className="input-group stretch">
-              <label>URI o Enlace</label>
+              <label>Enlace de Spotify o YouTube</label>
               <input 
                 type="text" 
-                placeholder="Pega el enlace de tu canción, álbum o playlist..." 
+                placeholder="Pega un enlace de Spotify (canción/playlist) o de YouTube..." 
                 value={ruta} 
                 onChange={(e) => setRuta(e.target.value)} 
                 required 
@@ -106,6 +107,7 @@ export default function InicioView({
           tareas.map((tarea) => {
             const activa = tarea.activa !== undefined ? tarea.activa : true;
             const diasTarea = Array.isArray(tarea.dias) && tarea.dias.length > 0 ? tarea.dias : [1, 2, 3, 4, 5, 6, 0];
+            const esYt = tarea.tipo === 'YouTube' || (tarea.ruta && (tarea.ruta.includes('youtube.com') || tarea.ruta.includes('youtu.be')));
 
             return (
               <div className={`task-row ${!activa ? 'task-disabled' : ''}`} key={tarea.id}>
@@ -138,7 +140,9 @@ export default function InicioView({
                       <img src={tarea.imagen} alt="Cover" className="task-thumb" />
                       <div className="task-meta">
                         <div className="task-title-row">
-                          <span className="media-badge">{tarea.tipo || 'Spotify'}</span>
+                          <span className={`media-badge ${esYt ? 'yt-badge' : ''}`}>
+                            {esYt ? '▶ YouTube' : (tarea.tipo || 'Spotify')}
+                          </span>
                           {tarea.fadeIn && <span className="fade-badge">📈 Fade-In</span>}
                           <span className="task-name">{tarea.nombre || tarea.ruta}</span>
                         </div>
@@ -146,6 +150,7 @@ export default function InicioView({
                       </div>
                     </div>
                     <div className="task-actions">
+                      <button className="outline-btn" onClick={() => reproducirItemDirecto(tarea.ruta)} title="Reproducir ahora">▶</button>
                       <button className="outline-btn" onClick={() => iniciarEdicion(tarea)}>✏️</button>
                       <button className="outline-btn" onClick={() => cargarListaManual(tarea.ruta)}>Ver Pista</button>
                       <button className="outline-btn danger" onClick={() => socket.emit('cancelar_tarea', tarea.id)}>Cancelar</button>

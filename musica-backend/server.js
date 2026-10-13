@@ -77,6 +77,28 @@ let fadeInterval = null;
 let sesionActiva = false;
 let volumenPrevioDucking = null;
 
+// Estado en memoria cuando el motor activo es YouTube
+let estadoYoutube = {
+    enUso: false,
+    activo: false,
+    videoId: '',
+    cancion: '',
+    artista: 'YouTube',
+    imagen: DEFAULT_IMG,
+    progreso: 0,
+    duracion: 0,
+    volumen: 80
+};
+
+// --- PARSERS DE SPOTIFY Y YOUTUBE ---
+function parseYoutubeId(input) {
+    if (!input || typeof input !== 'string') return null;
+    const url = input.trim();
+    const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts|live)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i;
+    const match = url.match(regex);
+    return match ? match[1] : null;
+}
+
 function parseSpotifyUri(input) {
     let uri = input.trim();
     if (uri.includes('spotify.com')) {
@@ -111,7 +133,6 @@ function iniciarFadeInVolumen(deviceId, volInicial = 10, volFinal = 80, duracion
     }, intervaloMs);
 }
 
-// Baja suavemente el volumen actual hasta 10% en ~2.8 segundos si ya hay música sonando
 async function ejecutarCrossfadeSalida(deviceId) {
     if (fadeInterval) {
         clearInterval(fadeInterval);
@@ -126,7 +147,7 @@ async function ejecutarCrossfadeSalida(deviceId) {
             estabaSonando = true;
             volOriginal = estado.body.device?.volume_percent ?? 80;
 
-            if (volOriginal > 15) {
+            if (volOriginal > 15 && deviceId) {
                 const pasos = 4;
                 const decremento = Math.round((volOriginal - 10) / pasos);
                 let v = volOriginal;
@@ -143,6 +164,33 @@ async function ejecutarCrossfadeSalida(deviceId) {
 }
 
 async function obtenerMetadatosRuta(rutaOriginal) {
+    // 1. Verificar primero si es un enlace de YouTube
+    const ytId = parseYoutubeId(rutaOriginal);
+    if (ytId) {
+        const fallbackYt = {
+            ruta: rutaOriginal,
+            nombre: `Video de YouTube (${ytId})`,
+            subtitulo: 'YouTube Music / Video',
+            imagen: `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`,
+            tipo: 'YouTube'
+        };
+        try {
+            const res = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${ytId}&format=json`);
+            if (res.ok) {
+                const data = await res.json();
+                return {
+                    ruta: rutaOriginal,
+                    nombre: data.title || fallbackYt.nombre,
+                    subtitulo: data.author_name ? `YouTube • ${data.author_name}` : 'YouTube',
+                    imagen: data.thumbnail_url || fallbackYt.imagen,
+                    tipo: 'YouTube'
+                };
+            }
+        } catch (e) {}
+        return fallbackYt;
+    }
+
+    // 2. Si no es YouTube, procesar como enlace/URI de Spotify
     const fallback = {
         ruta: rutaOriginal,
         nombre: rutaOriginal,
@@ -192,7 +240,6 @@ async function obtenerMetadatosRuta(rutaOriginal) {
 }
 
 async function actualizarMetadatosPendientes() {
-    if (!spotifyApi.getAccessToken()) return;
     let huboCambiosTareas = false;
     let huboCambiosHistorial = false;
 
@@ -254,6 +301,68 @@ async function emitirDispositivos() {
     } catch (e) {}
 }
 
+// Inicia la reproducción de un enlace de YouTube pausando Spotify con suavidad
+async function reproducirRutaYoutube(rutaOriginal, usarFadeIn = false, esAlarma = false) {
+    const ytId = parseYoutubeId(rutaOriginal);
+    if (!ytId) return;
+
+    // Si Spotify está reproduciendo, hacer Crossfade de salida y pausarlo
+    if (spotifyApi.getAccessToken()) {
+        try {
+            const device = await getActiveDevice();
+            if (device && device.is_active) {
+                await ejecutarCrossfadeSalida(device.id);
+                await spotifyApi.pause({ device_id: device.id });
+            }
+        } catch (e) {}
+    }
+
+    const meta = await obtenerMetadatosRuta(rutaOriginal);
+    estadoYoutube = {
+        enUso: true,
+        activo: true,
+        videoId: ytId,
+        cancion: meta.nombre,
+        artista: meta.subtitulo,
+        imagen: meta.imagen,
+        progreso: 0,
+        duracion: 0,
+        volumen: usarFadeIn ? 10 : (estadoYoutube.volumen || 80)
+    };
+
+    io.emit('youtube_comando', {
+        accion: 'play_video',
+        videoId: ytId,
+        nombre: meta.nombre,
+        artista: meta.subtitulo,
+        imagen: meta.imagen,
+        fadeIn: Boolean(usarFadeIn),
+        locutorActivo: Boolean(esAlarma && appConfig.vozActivada)
+    });
+
+    io.emit('estado_reproduccion', {
+        activo: true,
+        cancion: estadoYoutube.cancion,
+        artista: estadoYoutube.artista,
+        imagen: estadoYoutube.imagen,
+        progreso: 0,
+        duracion: 0,
+        volumen: estadoYoutube.volumen,
+        esYoutube: true,
+        videoId: ytId
+    });
+
+    if (esAlarma && appConfig.vozActivada) {
+        io.emit('hablar_tts', {
+            textoAdicional: appConfig.vozTexto,
+            volumenVoz: appConfig.vozVolumen ?? 50,
+            vozNombre: appConfig.vozNombre || '',
+            esAlarmaMusical: true,
+            fadeInAlTerminar: Boolean(usarFadeIn)
+        });
+    }
+}
+
 function iniciarServiciosSpotify() {
     sesionActiva = true;
     const tokenActual = spotifyApi.getAccessToken() || '';
@@ -288,6 +397,29 @@ function iniciarServiciosSpotify() {
                 preferredDeviceId: appConfig.preferredDeviceId || ''
             });
 
+            // Si el reproductor actual en uso es YouTube, no sobreescribir con el estado inactivo de Spotify
+            if (estadoYoutube.enUso) {
+                if (estado.body && estado.body.is_playing) {
+                    // Si el usuario le dio Play directamente en Spotify, detener YouTube y ceder el control
+                    estadoYoutube.enUso = false;
+                    estadoYoutube.activo = false;
+                    io.emit('youtube_comando', { accion: 'stop' });
+                } else {
+                    io.emit('estado_reproduccion', {
+                        activo: estadoYoutube.activo,
+                        cancion: estadoYoutube.cancion,
+                        artista: estadoYoutube.artista,
+                        imagen: estadoYoutube.imagen,
+                        progreso: estadoYoutube.progreso,
+                        duracion: estadoYoutube.duracion,
+                        volumen: estadoYoutube.volumen,
+                        esYoutube: true,
+                        videoId: estadoYoutube.videoId
+                    });
+                    return;
+                }
+            }
+
             if (estado.body && estado.body.item) {
                 io.emit('estado_reproduccion', {
                     activo: estado.body.is_playing,
@@ -297,10 +429,11 @@ function iniciarServiciosSpotify() {
                     progreso: estado.body.progress_ms,
                     duracion: estado.body.item.duration_ms,
                     volumen: estado.body.device?.volume_percent ?? 80,
-                    dispositivoActivo: estado.body.device?.name || ''
+                    dispositivoActivo: estado.body.device?.name || '',
+                    esYoutube: false
                 });
             } else {
-                io.emit('estado_reproduccion', { activo: false });
+                io.emit('estado_reproduccion', { activo: false, esYoutube: false });
             }
         } catch (error) {}
     }, 3000);
@@ -329,13 +462,28 @@ async function intentarAutoLogin() {
     }
 }
 
-// --- LÓGICA DE ALARMAS MUSICALES Y CRON (CON CROSSFADE SUAVE) ---
+// --- LÓGICA DE ALARMAS MUSICALES Y CRON (SOPORTA SPOTIFY Y YOUTUBE) ---
 function crearTareaCron(hora, minuto, ruta, dias = DIAS_TODOS, activa = true, fadeIn = false) {
+    const ytId = parseYoutubeId(ruta);
     const uriSpotify = parseSpotifyUri(ruta);
     const diasValidos = Array.isArray(dias) && dias.length > 0 ? dias : DIAS_TODOS;
     const diasCron = diasValidos.length === 7 ? '*' : diasValidos.join(',');
 
     const job = cron.schedule(`${minuto} ${hora} * * ${diasCron}`, async () => {
+        // Si la alarma es un enlace de YouTube, se reproduce directamente en el navegador
+        if (ytId) {
+            await reproducirRutaYoutube(ruta, Boolean(fadeIn), true);
+            return;
+        }
+
+        // Si es Spotify, primero detenemos YouTube si estaba sonando
+        if (estadoYoutube.enUso) {
+            estadoYoutube.enUso = false;
+            estadoYoutube.activo = false;
+            io.emit('youtube_comando', { accion: 'fade_out_stop' });
+            await esperar(2200);
+        }
+
         if (!spotifyApi.getAccessToken() && appConfig.refreshToken) {
             await intentarAutoLogin();
         }
@@ -350,7 +498,6 @@ function crearTareaCron(hora, minuto, ruta, dias = DIAS_TODOS, activa = true, fa
             deviceId = device.id;
             
             if (device.is_active) {
-                // Si ya estaba sonando otra canción, hace Fade-Out suave de 3s hasta 10%
                 infoCrossfade = await ejecutarCrossfadeSalida(deviceId);
                 try { await spotifyApi.pause({ device_id: deviceId }); } catch(e){}
                 await esperar(600); 
@@ -386,7 +533,6 @@ function crearTareaCron(hora, minuto, ruta, dias = DIAS_TODOS, activa = true, fa
             } else if (fadeIn) {
                 iniciarFadeInVolumen(deviceId, 10, 80, 30, 6);
             } else if (infoCrossfade.estabaSonando) {
-                // Termina la transición Crossfade subiendo en 3 segundos al volumen previo
                 iniciarFadeInVolumen(deviceId, 10, infoCrossfade.volOriginal, 3, 4);
             }
         } catch (err) {}
@@ -396,7 +542,7 @@ function crearTareaCron(hora, minuto, ruta, dias = DIAS_TODOS, activa = true, fa
     return job;
 }
 
-// --- LÓGICA DE ANUNCIOS DE VOZ PROGRAMADOS (CRON INDEPENDIENTE) ---
+// --- LÓGICA DE ANUNCIOS DE VOZ PROGRAMADOS ---
 function crearAnuncioCron(hora, minuto, texto, dias = DIAS_TODOS, activa = true) {
     const diasValidos = Array.isArray(dias) && dias.length > 0 ? dias : DIAS_TODOS;
     const diasCron = diasValidos.length === 7 ? '*' : diasValidos.join(',');
@@ -424,7 +570,7 @@ function serializarTareas() {
         nombre: t.nombre || t.ruta,
         subtitulo: t.subtitulo || 'Spotify',
         imagen: t.imagen || DEFAULT_IMG,
-        tipo: t.tipo || 'Enlace',
+        tipo: t.tipo || (parseYoutubeId(t.ruta) ? 'YouTube' : 'Enlace'),
         dias: Array.isArray(t.dias) && t.dias.length > 0 ? t.dias : DIAS_TODOS,
         activa: t.activa !== undefined ? t.activa : true,
         fadeIn: Boolean(t.fadeIn)
@@ -478,7 +624,7 @@ if (fs.existsSync(tareasPath)) {
                 nombre: t.nombre || t.ruta,
                 subtitulo: t.subtitulo || 'Enlace guardado',
                 imagen: t.imagen || DEFAULT_IMG,
-                tipo: t.tipo || 'Enlace',
+                tipo: t.tipo || (parseYoutubeId(t.ruta) ? 'YouTube' : 'Enlace'),
                 dias,
                 activa,
                 fadeIn,
@@ -583,8 +729,32 @@ io.on('connection', (socket) => {
     socket.emit('info_red', { ipLocal: obtenerIpLocal() });
     emitirDispositivos();
 
-    // --- AUDIO DUCKING: Bajar música al 10% mientras habla el locutor y restaurar al terminar ---
+    // Sincronización de progreso enviada desde el reproductor de YouTube del navegador
+    socket.on('youtube_progreso_sync', (datos) => {
+        if (!estadoYoutube.enUso) return;
+        if (datos.activo !== undefined) estadoYoutube.activo = datos.activo;
+        if (datos.progreso !== undefined) estadoYoutube.progreso = datos.progreso;
+        if (datos.duracion !== undefined) estadoYoutube.duracion = datos.duracion;
+        if (datos.volumen !== undefined) estadoYoutube.volumen = datos.volumen;
+
+        io.emit('estado_reproduccion', {
+            activo: estadoYoutube.activo,
+            cancion: estadoYoutube.cancion,
+            artista: estadoYoutube.artista,
+            imagen: estadoYoutube.imagen,
+            progreso: estadoYoutube.progreso,
+            duracion: estadoYoutube.duracion,
+            volumen: estadoYoutube.volumen,
+            esYoutube: true,
+            videoId: estadoYoutube.videoId
+        });
+    });
+
+    // --- AUDIO DUCKING: Bajar música (Spotify o YouTube) al 10% mientras habla el locutor ---
     socket.on('duck_audio_inicio', async (opciones) => {
+        if (estadoYoutube.enUso) {
+            io.emit('youtube_comando', { accion: 'volume', valor: 10 });
+        }
         if (!spotifyApi.getAccessToken()) return;
         try {
             if (fadeInterval) {
@@ -608,6 +778,13 @@ io.on('connection', (socket) => {
     });
 
     socket.on('duck_audio_fin', async (opciones) => {
+        if (estadoYoutube.enUso) {
+            if (opciones?.fadeInAlTerminar) {
+                io.emit('youtube_comando', { accion: 'fade_in', volFinal: 80, duracionSegundos: 25 });
+            } else {
+                io.emit('youtube_comando', { accion: 'volume', valor: estadoYoutube.volumen > 10 ? estadoYoutube.volumen : 80 });
+            }
+        }
         if (!spotifyApi.getAccessToken()) return;
         try {
             const device = await getActiveDevice();
@@ -691,8 +868,21 @@ io.on('connection', (socket) => {
         if (typeof cb === 'function') cb(ok);
     });
 
-    // Reproducción desde vista móvil / historial con Crossfade Suave
+    // Reproducción directa desde Historial, Horarios o Vista Móvil (Spotify o YouTube)
     socket.on('reproducir_item_directo', async (rutaOriginal) => {
+        const ytId = parseYoutubeId(rutaOriginal);
+        if (ytId) {
+            await reproducirRutaYoutube(rutaOriginal, false, false);
+            return;
+        }
+
+        if (estadoYoutube.enUso) {
+            estadoYoutube.enUso = false;
+            estadoYoutube.activo = false;
+            io.emit('youtube_comando', { accion: 'fade_out_stop' });
+            await esperar(1800);
+        }
+
         if (!spotifyApi.getAccessToken()) return;
         try {
             const uriSpotify = parseSpotifyUri(rutaOriginal);
@@ -792,6 +982,11 @@ io.on('connection', (socket) => {
     });
 
     socket.on('control_play', async () => { 
+        if (estadoYoutube.enUso) {
+            estadoYoutube.activo = true;
+            io.emit('youtube_comando', { accion: 'play' });
+            return;
+        }
         if (!spotifyApi.getAccessToken()) return;
         try { 
             const device = await getActiveDevice();
@@ -802,20 +997,40 @@ io.on('connection', (socket) => {
     });
 
     socket.on('control_pausa', async () => { 
+        if (estadoYoutube.enUso) {
+            estadoYoutube.activo = false;
+            io.emit('youtube_comando', { accion: 'pause' });
+            return;
+        }
         if (!spotifyApi.getAccessToken()) return;
         if (fadeInterval) { clearInterval(fadeInterval); fadeInterval = null; }
         try { const device = await getActiveDevice(); if(device) await spotifyApi.pause({ device_id: device.id }); } catch(e){} 
     });
+
     socket.on('control_siguiente', async () => { 
+        if (estadoYoutube.enUso) {
+            io.emit('youtube_comando', { accion: 'seek_relative', deltaMs: 15000 });
+            return;
+        }
         if (!spotifyApi.getAccessToken()) return;
         try { const device = await getActiveDevice(); if(device) await spotifyApi.skipToNext({ device_id: device.id }); } catch(e){} 
     });
+
     socket.on('control_anterior', async () => { 
+        if (estadoYoutube.enUso) {
+            io.emit('youtube_comando', { accion: 'seek', posicionMs: 0 });
+            return;
+        }
         if (!spotifyApi.getAccessToken()) return;
         try { const device = await getActiveDevice(); if(device) await spotifyApi.skipToPrevious({ device_id: device.id }); } catch(e){} 
     });
 
     socket.on('control_seek', async (posicionMs) => {
+        if (estadoYoutube.enUso) {
+            estadoYoutube.progreso = Math.floor(posicionMs);
+            io.emit('youtube_comando', { accion: 'seek', posicionMs: Math.floor(posicionMs) });
+            return;
+        }
         if (!spotifyApi.getAccessToken()) return;
         try {
             const device = await getActiveDevice();
@@ -824,19 +1039,35 @@ io.on('connection', (socket) => {
     });
 
     socket.on('control_volumen', async (nuevoVolumen) => {
+        const volSeguro = Math.max(0, Math.min(100, Math.round(nuevoVolumen)));
+        if (estadoYoutube.enUso) {
+            estadoYoutube.volumen = volSeguro;
+            io.emit('youtube_comando', { accion: 'volume', valor: volSeguro });
+            return;
+        }
         if (!spotifyApi.getAccessToken()) return;
         if (fadeInterval) { clearInterval(fadeInterval); fadeInterval = null; }
         try {
             const device = await getActiveDevice();
             if (device) {
-                const volSeguro = Math.max(0, Math.min(100, Math.round(nuevoVolumen)));
                 await spotifyApi.setVolume(volSeguro, { device_id: device.id });
             }
         } catch(e) {}
     });
 
-    // Reproducción desde la cola derecha con Crossfade Suave
     socket.on('reproducir_ahora', async (data) => {
+        if (data?.youtubeUrl) {
+            await reproducirRutaYoutube(data.youtubeUrl, false, false);
+            return;
+        }
+
+        if (estadoYoutube.enUso) {
+            estadoYoutube.enUso = false;
+            estadoYoutube.activo = false;
+            io.emit('youtube_comando', { accion: 'fade_out_stop' });
+            await esperar(1800);
+        }
+
         if (!spotifyApi.getAccessToken()) return;
         try {
             const { uris, offset } = data;
@@ -860,6 +1091,18 @@ io.on('connection', (socket) => {
     });
 
     socket.on('obtener_playlist', async (rutaOriginal) => {
+        const ytId = parseYoutubeId(rutaOriginal);
+        if (ytId) {
+            const meta = await obtenerMetadatosRuta(rutaOriginal);
+            socket.emit('lista_canciones_resultado', [{
+                numero: 1,
+                nombre: meta.nombre,
+                artista: meta.subtitulo,
+                youtubeUrl: rutaOriginal
+            }]);
+            return;
+        }
+
         if (!spotifyApi.getAccessToken()) return socket.emit('lista_canciones_resultado', ['⚠️ Inicia sesión primero.']);
         try {
             const uri = parseSpotifyUri(rutaOriginal);
@@ -972,7 +1215,7 @@ io.on('connection', (socket) => {
                         nombre: t.nombre || t.ruta,
                         subtitulo: t.subtitulo || 'Spotify',
                         imagen: t.imagen || DEFAULT_IMG,
-                        tipo: t.tipo || 'Enlace',
+                        tipo: t.tipo || (parseYoutubeId(t.ruta) ? 'YouTube' : 'Enlace'),
                         dias,
                         activa,
                         fadeIn,

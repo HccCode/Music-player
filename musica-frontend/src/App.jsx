@@ -36,6 +36,10 @@ function App() {
   const [errorSdk, setErrorSdk] = useState('');
   const playerRef = useRef(null);
 
+  // Referencias para el reproductor de YouTube integrado
+  const ytPlayerRef = useRef(null);
+  const ytFadeIntervalRef = useRef(null);
+
   const [ipLocal, setIpLocal] = useState('');
   const [mostrarModalQr, setMostrarModalQr] = useState(false);
 
@@ -57,9 +61,9 @@ function App() {
   const [mensajeGuardadoVoz, setMensajeGuardadoVoz] = useState(false);
 
   const [reproduccion, setReproduccion] = useState({ 
-    activo: false, cancion: 'Esperando música...', artista: 'Spotify API', 
+    activo: false, cancion: 'Esperando música...', artista: 'Spotify / YouTube', 
     imagen: 'https://i.scdn.co/image/ab6761610000e5eb55d39ab9c21d506aa52f7021',
-    progreso: 0, duracion: 0
+    progreso: 0, duracion: 0, esYoutube: false
   });
 
   const [colorAmbiente, setColorAmbiente] = useState('28, 45, 90');
@@ -129,6 +133,91 @@ function App() {
     };
   }, [modoKiosco]);
 
+  // Inicializar YouTube IFrame API en PC
+  useEffect(() => {
+    if (esMovil) return;
+
+    const crearPlayerYt = () => {
+      if (ytPlayerRef.current || !window.YT || !window.YT.Player) return;
+      ytPlayerRef.current = new window.YT.Player('youtube-hidden-player', {
+        height: '1',
+        width: '1',
+        playerVars: {
+          autoplay: 1,
+          controls: 0,
+          disablekb: 1,
+          fs: 0,
+          rel: 0,
+          origin: window.location.origin
+        },
+        events: {
+          onStateChange: (event) => {
+            // 1 = PLAYING, 2 = PAUSED, 0 = ENDED
+            const reproduciendo = event.data === 1;
+            const duracionMs = Math.floor((event.target.getDuration() || 0) * 1000);
+            const progresoMs = Math.floor((event.target.getCurrentTime() || 0) * 1000);
+            socket.emit('youtube_progreso_sync', {
+              activo: reproduciendo,
+              progreso: progresoMs,
+              duracion: duracionMs
+            });
+          }
+        }
+      });
+    };
+
+    if (window.YT && window.YT.Player) {
+      crearPlayerYt();
+    } else {
+      window.onYouTubeIframeAPIReady = crearPlayerYt;
+      if (!document.getElementById('youtube-iframe-sdk')) {
+        const tag = document.createElement('script');
+        tag.id = 'youtube-iframe-sdk';
+        tag.src = 'https://www.youtube.com/iframe_api';
+        document.body.appendChild(tag);
+      }
+    }
+  }, [esMovil]);
+
+  // Sincronizar cada 2s el progreso del reproductor de YouTube con el servidor
+  useEffect(() => {
+    if (esMovil || !reproduccion.esYoutube || !reproduccion.activo) return;
+    const syncTimer = setInterval(() => {
+      const yt = ytPlayerRef.current;
+      if (yt && typeof yt.getCurrentTime === 'function') {
+        const progresoMs = Math.floor((yt.getCurrentTime() || 0) * 1000);
+        const duracionMs = Math.floor((yt.getDuration() || 0) * 1000);
+        socket.emit('youtube_progreso_sync', {
+          activo: true,
+          progreso: progresoMs,
+          duracion: duracionMs
+        });
+      }
+    }, 2000);
+    return () => clearInterval(syncTimer);
+  }, [esMovil, reproduccion.esYoutube, reproduccion.activo]);
+
+  const iniciarFadeInYoutube = (volInicial = 10, volFinal = 80, duracionSegundos = 30) => {
+    if (ytFadeIntervalRef.current) clearInterval(ytFadeIntervalRef.current);
+    let volActual = volInicial;
+    const pasos = 6;
+    const incremento = Math.max(1, Math.round((volFinal - volInicial) / pasos));
+    const intervaloMs = Math.max(300, Math.round((duracionSegundos * 1000) / pasos));
+
+    ytFadeIntervalRef.current = setInterval(() => {
+      volActual += incremento;
+      if (volActual >= volFinal) {
+        volActual = volFinal;
+        clearInterval(ytFadeIntervalRef.current);
+        ytFadeIntervalRef.current = null;
+      }
+      if (ytPlayerRef.current && typeof ytPlayerRef.current.setVolume === 'function') {
+        ytPlayerRef.current.setVolume(volActual);
+      }
+      setVolumen(volActual);
+    }, intervaloMs);
+  };
+
   const hablarConClima = (textoPersonalizado, opciones = {}) => {
     ejecutarLocutorConClima({
       textoPersonalizado,
@@ -193,6 +282,54 @@ function App() {
       });
     });
 
+    // Comandos para controlar el reproductor de YouTube integrado
+    socket.on('youtube_comando', (cmd) => {
+      const yt = ytPlayerRef.current;
+      if (!yt || typeof yt.loadVideoById !== 'function') return;
+
+      if (cmd.accion === 'play_video') {
+        if (ytFadeIntervalRef.current) clearInterval(ytFadeIntervalRef.current);
+        const volInicial = (cmd.fadeIn || cmd.locutorActivo) ? 10 : 80;
+        yt.setVolume(volInicial);
+        yt.loadVideoById(cmd.videoId);
+        yt.playVideo();
+
+        if (cmd.fadeIn && !cmd.locutorActivo) {
+          iniciarFadeInYoutube(10, 80, 30);
+        }
+      } else if (cmd.accion === 'play') {
+        yt.playVideo();
+      } else if (cmd.accion === 'pause') {
+        if (ytFadeIntervalRef.current) clearInterval(ytFadeIntervalRef.current);
+        yt.pauseVideo();
+      } else if (cmd.accion === 'stop') {
+        if (ytFadeIntervalRef.current) clearInterval(ytFadeIntervalRef.current);
+        yt.stopVideo();
+      } else if (cmd.accion === 'fade_out_stop') {
+        if (ytFadeIntervalRef.current) clearInterval(ytFadeIntervalRef.current);
+        let v = yt.getVolume ? yt.getVolume() : 80;
+        const fadeOut = setInterval(() => {
+          v = Math.max(0, v - 20);
+          if (yt.setVolume) yt.setVolume(v);
+          if (v <= 10) {
+            clearInterval(fadeOut);
+            yt.stopVideo();
+          }
+        }, 350);
+      } else if (cmd.accion === 'volume') {
+        if (ytFadeIntervalRef.current) clearInterval(ytFadeIntervalRef.current);
+        yt.setVolume(cmd.valor);
+        setVolumen(cmd.valor);
+      } else if (cmd.accion === 'fade_in') {
+        iniciarFadeInYoutube(10, cmd.volFinal || 80, cmd.duracionSegundos || 25);
+      } else if (cmd.accion === 'seek') {
+        yt.seekTo((cmd.posicionMs || 0) / 1000, true);
+      } else if (cmd.accion === 'seek_relative') {
+        const actual = yt.getCurrentTime ? yt.getCurrentTime() : 0;
+        yt.seekTo(actual + (cmd.deltaMs || 15000) / 1000, true);
+      }
+    });
+
     return () => {
       socket.off('tareas_actualizadas'); socket.off('anuncios_actualizados');
       socket.off('estado_reproduccion'); socket.off('lista_canciones_resultado');
@@ -200,10 +337,11 @@ function App() {
       socket.off('locutor_guardado_ok'); socket.off('historial_actualizado');
       socket.off('dispositivos_actualizados'); socket.off('backup_importado_ok');
       socket.off('estado_sesion'); socket.off('info_red'); socket.off('hablar_tts');
+      socket.off('youtube_comando');
     };
   }, []);
 
-  // Web Playback SDK
+  // Web Playback SDK (Spotify)
   useEffect(() => {
     if (esMovil || !spotifyToken || !window.isSecureContext || playerRef.current) return;
 
@@ -225,21 +363,25 @@ function App() {
       });
       player.addListener('not_ready', () => setSdkListo(false));
       player.addListener('initialization_error', () => setErrorSdk('Activa "Contenido protegido" en tu navegador'));
-      player.addListener('authentication_error', () => setErrorSdk('Haz clic en "Cambiar / Reconectar"'));
+      player.addListener('authentication_error', () => setErrorSdk('Haz clic en "Reconectar"'));
       player.addListener('account_error', () => setErrorSdk('Se requiere Spotify Premium para el Web Player'));
       player.addListener('player_state_changed', (state) => {
         if (!state) return;
         const currentTrack = state.track_window?.current_track;
         if (currentTrack) {
-          setReproduccion(prev => ({
-            ...prev,
-            activo: !state.paused,
-            cancion: currentTrack.name,
-            artista: currentTrack.artists.map(a => a.name).join(', '),
-            imagen: currentTrack.album.images[0]?.url || prev.imagen,
-            progreso: state.position,
-            duracion: state.duration
-          }));
+          setReproduccion(prev => {
+            if (prev.esYoutube && state.paused) return prev;
+            return {
+              ...prev,
+              activo: !state.paused,
+              cancion: currentTrack.name,
+              artista: currentTrack.artists.map(a => a.name).join(', '),
+              imagen: currentTrack.album.images[0]?.url || prev.imagen,
+              progreso: state.position,
+              duracion: state.duration,
+              esYoutube: false
+            };
+          });
           setProgresoLocal(state.position);
         }
       });
@@ -356,6 +498,7 @@ function App() {
   };
 
   const cargarListaManual = (rutaLista) => socket.emit('obtener_playlist', rutaLista);
+  const reproducirItemDirecto = (rutaItem) => socket.emit('reproducir_item_directo', rutaItem);
   const reusarRuta = (rutaExistente) => { setRuta(rutaExistente); setVistaActiva('inicio'); };
   const eliminarDelHistorial = (rutaEliminar) => socket.emit('eliminar_historial', rutaEliminar);
 
@@ -363,6 +506,11 @@ function App() {
     if (playerRef.current?.activateElement) {
       playerRef.current.activateElement();
       setAudioDesbloqueado(true);
+    }
+    const item = cola[index];
+    if (item?.youtubeUrl) {
+      socket.emit('reproducir_ahora', { youtubeUrl: item.youtubeUrl });
+      return;
     }
     const uris = cola.slice(0, 80).map(t => t.uri).filter(Boolean);
     if (uris.length > 0) socket.emit('reproducir_ahora', { uris, offset: index >= 80 ? 0 : index });
@@ -381,7 +529,9 @@ function App() {
     const nuevoVol = Number(e.target.value);
     cambiandoVolumenRef.current = true;
     setVolumen(nuevoVol);
-    if (playerRef.current && dispositivoPreferido === webPlayerId) {
+    if (reproduccion.esYoutube && ytPlayerRef.current?.setVolume) {
+      ytPlayerRef.current.setVolume(nuevoVol);
+    } else if (playerRef.current && dispositivoPreferido === webPlayerId) {
       playerRef.current.setVolume(nuevoVol / 100).catch(() => {});
     }
     socket.emit('control_volumen', nuevoVol);
@@ -442,6 +592,12 @@ function App() {
 
   return (
     <div className="modern-spotify-layout" style={{ '--ambient-rgb': colorAmbiente }}>
+      {/* Contenedor oculto para el reproductor de YouTube IFrame API */}
+      <div 
+        id="youtube-hidden-player" 
+        style={{ position: 'fixed', bottom: '-10px', right: '-10px', width: '1px', height: '1px', opacity: 0.01, pointerEvents: 'none' }}
+      ></div>
+
       <KioskOverlay
         modoKiosco={modoKiosco}
         mostrarControlesKiosco={mostrarControlesKiosco}
@@ -462,11 +618,9 @@ function App() {
         <SidebarLeft
           vistaActiva={vistaActiva}
           setVistaActiva={setVistaActiva}
-          sesionAutenticada={sesionAutenticada}
         />
 
         <main className="panel center-panel">
-          {/* CABECERA SIN EL RELOJ (EL RELOJ AHORA VIVE EXCLUSIVAMENTE EN MODO KIOSCO) */}
           <header className="center-header">
             <div className="header-live-info">
               <div className={`next-alarm-banner ${proximaAlarma ? 'active' : ''}`}>
@@ -508,6 +662,7 @@ function App() {
                 setRuta={setRuta}
                 socket={socket}
                 cargarListaManual={cargarListaManual}
+                reproducirItemDirecto={reproducirItemDirecto}
               />
             )}
 
@@ -515,6 +670,7 @@ function App() {
               <HistorialView
                 historial={historial}
                 cargarListaManual={cargarListaManual}
+                reproducirItemDirecto={reproducirItemDirecto}
                 reusarRuta={reusarRuta}
                 eliminarDelHistorial={eliminarDelHistorial}
               />
@@ -555,7 +711,7 @@ function App() {
         />
       </div>
 
-<BottomPlayer
+      <BottomPlayer
         reproduccion={reproduccion}
         sesionAutenticada={sesionAutenticada}
         socket={socket}
