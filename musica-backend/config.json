@@ -1,6 +1,10 @@
 {
     "clientId": "1f6b538e02e94badaf70e028df6b0f56",
     "clientSecret": "46f576c4e34a4609b1e94ac63672c4e1",
-    "preferredDeviceId": "fe333ae2719af02c6fc09e606a36540a10208031",
-    "refreshToken": "AQD_GDUT3QchWEwaKEn9trh3No57kwv1YFup3nrNcJeygpGLgGQcFxJQy_5RxAiK5mS8LIxWRFDSCun8wiHIMOsS6BpB1fXSR8X-uYkijOSuUKEgtal7qoeVjQKgpJBdXpM"
+    "preferredDeviceId": "213cce2527f4bb9a9833056eb9c75edd3a3fdca9",
+    "refreshToken": "AQBLHlMtYve0jqgsQBH5W0BGLiUAULYWpQ6i92TDA9DsvN4TWRvz_oM3Cfo7J5KgmLhRD9DWiMAOGawbAQ-tgeisvvHdjlJoDA3bed8j98ww39YH5Z1sVhg0t_EwiLRP-Lg",
+    "vozActivada": true,
+    "vozTexto": "¡Es hora de despertar y comenzar con energía!",
+    "vozVolumen": 50,
+    "vozNombre": ""
 }

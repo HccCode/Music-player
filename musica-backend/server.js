@@ -5,7 +5,7 @@ const cron = require('node-cron');
 const SpotifyWebApi = require('spotify-web-api-node');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
+const os = require('os'); 
 
 const app = express();
 const server = http.createServer(app);
@@ -31,12 +31,17 @@ function obtenerIpLocal() {
 const configPath = path.join(__dirname, 'config.json');
 const tareasPath = path.join(__dirname, 'tareas.json');
 const historialPath = path.join(__dirname, 'historial.json'); 
+const anunciosPath = path.join(__dirname, 'anuncios.json');
 
 let appConfig = { 
     clientId: '1f6b538e02e94badaf70e028df6b0f56', 
     clientSecret: '46f576c4e34a4609b1e94ac63672c4e1',
     preferredDeviceId: '',
-    refreshToken: ''
+    refreshToken: '',
+    vozActivada: false,
+    vozTexto: '¡Es hora de despertar y comenzar con energía!',
+    vozVolumen: 50,
+    vozNombre: ''
 };
 
 if (fs.existsSync(configPath)) {
@@ -47,7 +52,6 @@ if (fs.existsSync(configPath)) {
 const DEFAULT_IMG = 'https://i.scdn.co/image/ab6761610000e5eb55d39ab9c21d506aa52f7021';
 const DIAS_TODOS = [1, 2, 3, 4, 5, 6, 0];
 
-// Cargar y normalizar Historial
 let historial = [];
 if (fs.existsSync(historialPath)) {
     try { 
@@ -66,10 +70,12 @@ const spotifyApi = new SpotifyWebApi({
 });
 
 let tareasProgramadas = [];
+let anunciosProgramados = [];
 let tokenRefreshInterval = null;
 let monitorReproduccion = null;
 let fadeInterval = null;
 let sesionActiva = false;
+let volumenPrevioDucking = null;
 
 function parseSpotifyUri(input) {
     let uri = input.trim();
@@ -292,19 +298,22 @@ async function intentarAutoLogin() {
     }
 }
 
-// --- LÓGICA DE ALARMAS Y CRON ---
+// --- LÓGICA DE ALARMAS MUSICALES Y CRON ---
 function crearTareaCron(hora, minuto, ruta, dias = DIAS_TODOS, activa = true, fadeIn = false) {
     const uriSpotify = parseSpotifyUri(ruta);
     const diasValidos = Array.isArray(dias) && dias.length > 0 ? dias : DIAS_TODOS;
     const diasCron = diasValidos.length === 7 ? '*' : diasValidos.join(',');
 
     const job = cron.schedule(`${minuto} ${hora} * * ${diasCron}`, async () => {
+        if (!spotifyApi.getAccessToken() && appConfig.refreshToken) {
+            await intentarAutoLogin();
+        }
         if (!spotifyApi.getAccessToken()) return;
 
         let deviceId = null;
         try {
             const device = await getActiveDevice();
-            if (!device) return;
+            if (!device) return console.log('⚠️ No se encontró dispositivo para la alarma.');
             deviceId = device.id;
             
             if (device.is_active) {
@@ -315,7 +324,7 @@ function crearTareaCron(hora, minuto, ruta, dias = DIAS_TODOS, activa = true, fa
                 await esperar(2200); 
             }
 
-            if (fadeIn) {
+            if (fadeIn || appConfig.vozActivada) {
                 try {
                     await spotifyApi.setVolume(10, { device_id: deviceId });
                     await esperar(400);
@@ -331,10 +340,37 @@ function crearTareaCron(hora, minuto, ruta, dias = DIAS_TODOS, activa = true, fa
             
             await spotifyApi.play(opcionesPlay);
 
-            if (fadeIn) {
+            if (appConfig.vozActivada) {
+                io.emit('hablar_tts', { 
+                    textoAdicional: appConfig.vozTexto,
+                    volumenVoz: appConfig.vozVolumen ?? 50,
+                    vozNombre: appConfig.vozNombre || '',
+                    esAlarmaMusical: true,
+                    fadeInAlTerminar: Boolean(fadeIn)
+                });
+            } else if (fadeIn) {
                 iniciarFadeInVolumen(deviceId, 10, 80, 30);
             }
         } catch (err) {}
+    });
+
+    if (!activa) job.stop();
+    return job;
+}
+
+// --- LÓGICA DE ANUNCIOS DE VOZ PROGRAMADOS (CRON INDEPENDIENTE) ---
+function crearAnuncioCron(hora, minuto, texto, dias = DIAS_TODOS, activa = true) {
+    const diasValidos = Array.isArray(dias) && dias.length > 0 ? dias : DIAS_TODOS;
+    const diasCron = diasValidos.length === 7 ? '*' : diasValidos.join(',');
+
+    const job = cron.schedule(`${minuto} ${hora} * * ${diasCron}`, () => {
+        console.log(`🎙️ Disparando anuncio programado (${hora}:${minuto}): ${texto}`);
+        io.emit('hablar_tts', {
+            textoAdicional: texto,
+            volumenVoz: appConfig.vozVolumen ?? 50,
+            vozNombre: appConfig.vozNombre || '',
+            esAlarmaMusical: false
+        });
     });
 
     if (!activa) job.stop();
@@ -357,14 +393,34 @@ function serializarTareas() {
     }));
 }
 
+function serializarAnuncios() {
+    return anunciosProgramados.map(a => ({
+        id: a.id,
+        hora: a.hora,
+        minuto: a.minuto,
+        texto: a.texto,
+        dias: Array.isArray(a.dias) && a.dias.length > 0 ? a.dias : DIAS_TODOS,
+        activa: a.activa !== undefined ? a.activa : true
+    }));
+}
+
 function emitirTareas() {
     io.emit('tareas_actualizadas', serializarTareas());
+}
+
+function emitirAnuncios() {
+    io.emit('anuncios_actualizados', serializarAnuncios());
 }
 
 function guardarTareasEnArchivo() {
     fs.writeFileSync(tareasPath, JSON.stringify(serializarTareas(), null, 4));
 }
 
+function guardarAnunciosEnArchivo() {
+    fs.writeFileSync(anunciosPath, JSON.stringify(serializarAnuncios(), null, 4));
+}
+
+// Cargar tareas musicales al iniciar
 if (fs.existsSync(tareasPath)) {
     try {
         const tareasGuardadas = JSON.parse(fs.readFileSync(tareasPath, 'utf8'));
@@ -410,6 +466,27 @@ if (fs.existsSync(tareasPath)) {
     } catch (e) {}
 }
 
+// Cargar anuncios de voz programados al iniciar
+if (fs.existsSync(anunciosPath)) {
+    try {
+        const anunciosGuardados = JSON.parse(fs.readFileSync(anunciosPath, 'utf8'));
+        anunciosGuardados.forEach(a => {
+            const dias = Array.isArray(a.dias) && a.dias.length > 0 ? a.dias : DIAS_TODOS;
+            const activa = a.activa !== undefined ? a.activa : true;
+            const cronObj = crearAnuncioCron(a.hora, a.minuto, a.texto, dias, activa);
+            anunciosProgramados.push({
+                id: a.id,
+                hora: a.hora,
+                minuto: a.minuto,
+                texto: a.texto,
+                dias,
+                activa,
+                cronObj
+            });
+        });
+    } catch (e) {}
+}
+
 // ----- RUTAS DE AUTENTICACIÓN -----
 app.get('/login', (req, res) => {
   const scopes = [
@@ -442,7 +519,7 @@ app.get('/callback', (req, res) => {
       await actualizarMetadatosPendientes();
       await emitirDispositivos();
 
-      res.send('<h2 style="color:#1DB954; text-align:center; margin-top:50px; font-family:sans-serif;">¡Autenticación Exitosa!<br>Ya puedes cerrar esta pestaña y volver a tu dashboard.</h2>');
+      res.send('<h2 style="color:#1DB954; text-align:center; margin-top:50px; font-family:sans-serif;">¡Autenticación Exitosa!<br>Ya puedes cerrar esta pestaña.</h2>');
     }, (err) => res.send('Error en la autenticación.')
   );
 });
@@ -450,10 +527,15 @@ app.get('/callback', (req, res) => {
 // ----- LÓGICA DE SOCKETS -----
 io.on('connection', (socket) => {
     socket.emit('tareas_actualizadas', serializarTareas());
+    socket.emit('anuncios_actualizados', serializarAnuncios());
     socket.emit('configuracion_actual', {
         clientId: appConfig.clientId,
         clientSecret: appConfig.clientSecret,
-        preferredDeviceId: appConfig.preferredDeviceId || ''
+        preferredDeviceId: appConfig.preferredDeviceId || '',
+        vozActivada: Boolean(appConfig.vozActivada),
+        vozTexto: appConfig.vozTexto || '',
+        vozVolumen: appConfig.vozVolumen ?? 50,
+        vozNombre: appConfig.vozNombre || ''
     });
     socket.emit('historial_actualizado', historial);
     socket.emit('estado_sesion', { 
@@ -463,13 +545,114 @@ io.on('connection', (socket) => {
     socket.emit('info_red', { ipLocal: obtenerIpLocal() });
     emitirDispositivos();
 
-    // Reconexión rápida desde móvil o PC usando el refreshToken guardado
+    // --- AUDIO DUCKING: Bajar música al 10% mientras habla el locutor y restaurar al terminar ---
+    socket.on('duck_audio_inicio', async (opciones) => {
+        if (!spotifyApi.getAccessToken()) return;
+        try {
+            if (fadeInterval) {
+                clearInterval(fadeInterval);
+                fadeInterval = null;
+            }
+            const estado = await spotifyApi.getMyCurrentPlaybackState();
+            const device = await getActiveDevice();
+            if (!device) return;
+
+            if (!opciones?.esAlarmaMusical) {
+                const volActual = estado.body?.device?.volume_percent;
+                if (typeof volActual === 'number' && volActual > 10) {
+                    volumenPrevioDucking = volActual;
+                } else if (volumenPrevioDucking === null) {
+                    volumenPrevioDucking = 80;
+                }
+            }
+            await spotifyApi.setVolume(10, { device_id: device.id });
+        } catch (e) {}
+    });
+
+    socket.on('duck_audio_fin', async (opciones) => {
+        if (!spotifyApi.getAccessToken()) return;
+        try {
+            const device = await getActiveDevice();
+            if (!device) return;
+
+            if (opciones?.esAlarmaMusical) {
+                if (opciones?.fadeInAlTerminar) {
+                    iniciarFadeInVolumen(device.id, 10, 80, 25);
+                } else {
+                    await spotifyApi.setVolume(80, { device_id: device.id });
+                }
+            } else if (volumenPrevioDucking !== null) {
+                await spotifyApi.setVolume(volumenPrevioDucking, { device_id: device.id });
+                volumenPrevioDucking = null;
+            }
+        } catch (e) {}
+    });
+
+    // --- GESTIÓN DE ANUNCIOS PROGRAMADOS ---
+    socket.on('programar_anuncio', (data) => {
+        const { hora, minuto, texto, dias } = data;
+        if (!hora || !minuto || !texto) return;
+        const diasSeleccionados = Array.isArray(dias) && dias.length > 0 ? dias : DIAS_TODOS;
+        const cronObj = crearAnuncioCron(hora, minuto, texto, diasSeleccionados, true);
+
+        anunciosProgramados.push({
+            id: Date.now(),
+            hora,
+            minuto,
+            texto,
+            dias: diasSeleccionados,
+            activa: true,
+            cronObj
+        });
+        guardarAnunciosEnArchivo();
+        emitirAnuncios();
+    });
+
+    socket.on('toggle_anuncio', (id) => {
+        const index = anunciosProgramados.findIndex(a => String(a.id) === String(id));
+        if (index !== -1) {
+            const anuncio = anunciosProgramados[index];
+            anuncio.activa = !anuncio.activa;
+            if (anuncio.activa) anuncio.cronObj.start();
+            else anuncio.cronObj.stop();
+            guardarAnunciosEnArchivo();
+            emitirAnuncios();
+        }
+    });
+
+    socket.on('editar_anuncio', (data) => {
+        const { id, nuevaHora, nuevoMinuto, nuevoTexto, nuevosDias } = data;
+        const index = anunciosProgramados.findIndex(a => String(a.id) === String(id));
+        if (index !== -1) {
+            const anuncio = anunciosProgramados[index];
+            anuncio.cronObj.stop();
+            if (nuevaHora !== undefined) anuncio.hora = nuevaHora;
+            if (nuevoMinuto !== undefined) anuncio.minuto = nuevoMinuto;
+            if (nuevoTexto !== undefined) anuncio.texto = nuevoTexto;
+            if (Array.isArray(nuevosDias) && nuevosDias.length > 0) {
+                anuncio.dias = nuevosDias;
+            }
+            anuncio.cronObj = crearAnuncioCron(anuncio.hora, anuncio.minuto, anuncio.texto, anuncio.dias, anuncio.activa);
+            guardarAnunciosEnArchivo();
+            emitirAnuncios();
+        }
+    });
+
+    socket.on('eliminar_anuncio', (id) => {
+        const index = anunciosProgramados.findIndex(a => String(a.id) === String(id));
+        if (index !== -1) {
+            anunciosProgramados[index].cronObj.stop();
+            anunciosProgramados.splice(index, 1);
+            guardarAnunciosEnArchivo();
+            emitirAnuncios();
+        }
+    });
+
     socket.on('forzar_reconexion', async (cb) => {
         const ok = await intentarAutoLogin();
         if (typeof cb === 'function') cb(ok);
     });
 
-    // Reproducir directamente una canción o playlist del Historial (ideal para móvil)
     socket.on('reproducir_item_directo', async (rutaOriginal) => {
         if (!spotifyApi.getAccessToken()) return;
         try {
@@ -503,15 +686,43 @@ io.on('connection', (socket) => {
         await emitirDispositivos();
     });
 
+    socket.on('guardar_locutor', (datosVoz) => {
+        if (datosVoz.vozActivada !== undefined) {
+            appConfig.vozActivada = Boolean(datosVoz.vozActivada);
+        }
+        if (datosVoz.vozTexto !== undefined) {
+            appConfig.vozTexto = datosVoz.vozTexto;
+        }
+        if (datosVoz.vozVolumen !== undefined) {
+            appConfig.vozVolumen = Number(datosVoz.vozVolumen);
+        }
+        if (datosVoz.vozNombre !== undefined) {
+            appConfig.vozNombre = datosVoz.vozNombre;
+        }
+        fs.writeFileSync(configPath, JSON.stringify(appConfig, null, 4));
+        io.emit('locutor_guardado_ok', {
+            vozActivada: appConfig.vozActivada,
+            vozTexto: appConfig.vozTexto,
+            vozVolumen: appConfig.vozVolumen,
+            vozNombre: appConfig.vozNombre
+        });
+    });
+
     socket.on('guardar_configuracion', (nuevosDatos) => {
-        const cambioCredenciales = appConfig.clientId !== nuevosDatos.clientId || appConfig.clientSecret !== nuevosDatos.clientSecret;
-        appConfig.clientId = nuevosDatos.clientId;
-        appConfig.clientSecret = nuevosDatos.clientSecret;
+        const nuevoId = (nuevosDatos.clientId || '').trim();
+        const nuevoSecret = (nuevosDatos.clientSecret || '').trim();
+        if (!nuevoId || !nuevoSecret) return;
+
+        const cambioCredenciales = appConfig.clientId !== nuevoId || appConfig.clientSecret !== nuevoSecret;
+        appConfig.clientId = nuevoId;
+        appConfig.clientSecret = nuevoSecret;
+
         if (cambioCredenciales) {
             appConfig.refreshToken = '';
             sesionActiva = false;
             io.emit('estado_sesion', { autenticado: false, accessToken: '' });
         }
+        
         fs.writeFileSync(configPath, JSON.stringify(appConfig, null, 4));
         spotifyApi.setClientId(appConfig.clientId);
         spotifyApi.setClientSecret(appConfig.clientSecret);
@@ -527,9 +738,7 @@ io.on('connection', (socket) => {
         fs.writeFileSync(configPath, JSON.stringify(appConfig, null, 4));
 
         if (deviceId && spotifyApi.getAccessToken()) {
-            try {
-                await spotifyApi.transferMyPlayback([deviceId]);
-            } catch (e) {}
+            try { await spotifyApi.transferMyPlayback([deviceId]); } catch (e) {}
         }
         await emitirDispositivos();
     });
@@ -711,6 +920,30 @@ io.on('connection', (socket) => {
                 });
                 guardarTareasEnArchivo();
                 emitirTareas();
+            }
+
+            if (Array.isArray(backupData.anuncios)) {
+                anunciosProgramados.forEach(a => a.cronObj.stop());
+                anunciosProgramados = [];
+
+                backupData.anuncios.forEach(a => {
+                    if (!a.hora || !a.minuto || !a.texto) return;
+                    const dias = Array.isArray(a.dias) && a.dias.length > 0 ? a.dias : DIAS_TODOS;
+                    const activa = a.activa !== undefined ? a.activa : true;
+                    const cronObj = crearAnuncioCron(a.hora, a.minuto, a.texto, dias, activa);
+
+                    anunciosProgramados.push({
+                        id: a.id || Date.now() + Math.floor(Math.random() * 10000),
+                        hora: a.hora,
+                        minuto: a.minuto,
+                        texto: a.texto,
+                        dias,
+                        activa,
+                        cronObj
+                    });
+                });
+                guardarAnunciosEnArchivo();
+                emitirAnuncios();
             }
 
             if (Array.isArray(backupData.historial)) {

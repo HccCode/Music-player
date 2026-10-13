@@ -5,7 +5,7 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: true, // Expone automáticamente el servidor en tu red Wi-Fi local
+    host: true, // Esto permite que otros dispositivos en tu red Wi-Fi se conecten
     port: 5173
   }
 })
